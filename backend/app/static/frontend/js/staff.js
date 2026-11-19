@@ -1,0 +1,2 @@
+// Staff screens remain unavailable until backend staff authentication and authorisation endpoints exist.
+document.addEventListener("DOMContentLoaded",()=>{ /* backend must enforce all staff permissions */ });

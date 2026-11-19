@@ -1,0 +1,6 @@
+easyocr
+scikit-learn
+pandas
+openpyxl
+pillow
+numpy

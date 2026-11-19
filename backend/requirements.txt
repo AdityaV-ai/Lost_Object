@@ -1,0 +1,12 @@
+Flask>=3.0,<4
+Flask-SQLAlchemy>=3.1,<4
+Flask-Login>=0.6,<1
+python-dotenv>=1,<2
+Pillow>=10,<13
+numpy>=1.26
+pandas>=2.1
+scikit-learn>=1.4
+
+# Live image inference (Sourya module)
+torch
+open_clip_torch

@@ -1,0 +1,17 @@
+Lost ID,Found ID,Text similarity,Text available,Pair type
+L001,F001,0.247,True,same object
+L016,F016,0.722,True,same object
+L024,F024,0.717,True,same object
+L030,F030,0.529,True,same object
+L034,F034,0.441,True,same object
+L039,F039,0.63,True,same object
+L007,F007,0.0,True,"same object (no readable text, found has no description)"
+L001,F002,0.0,False,"same category, different object"
+L016,F015,0.0,False,"same category, different object"
+L024,F025,0.0,False,"same category, different object"
+L030,F032,0.365,True,"same category, different object"
+L034,F035,0.0,False,"same category, different object"
+L001,F020,0.0,False,completely different
+L016,F030,0.0,True,completely different
+L024,F037,0.0,False,completely different
+L034,F011,0.0,True,completely different

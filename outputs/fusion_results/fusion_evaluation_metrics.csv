@@ -1,0 +1,9 @@
+metric,value
+ROC-AUC,0.978125
+Average Precision,0.9312633636289677
+Recall@5,1.0
+Accuracy,0.86875
+Precision,0.6557377049180327
+Recall,1.0
+F1-score,0.7920792079207921
+Threshold,0.5
