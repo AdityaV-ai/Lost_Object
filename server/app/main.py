@@ -14,6 +14,10 @@ from app.db.session import init_db
 async def lifespan(_: FastAPI):
     init_db()
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    if settings.image_matching_enabled:  # load the model in the background so the first report isn't slow
+        import threading
+        from app.integrations import image_embeddings
+        threading.Thread(target=image_embeddings.warmup, daemon=True, name="openclip-warmup").start()
     yield
 
 

@@ -1,31 +1,30 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AppLayout, RequireAuth } from "./components/Layout";
-import Home from "./pages/Home";
+import { AppShell, RequireAuth } from "./components/Layout";
+import Landing from "./pages/Landing";
 import { Login, Register } from "./pages/AuthPages";
-import Dashboard from "./pages/Dashboard";
+import Overview from "./pages/Overview";
 import { ReportFound, ReportLost } from "./pages/ReportForms";
-import { MatchDetail, Matches } from "./pages/Matches";
+import Matches from "./pages/Matches";
 import Staff from "./pages/Staff";
 
 export default function App() {
   return (
     <Routes>
+      <Route index element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
-      <Route element={<AppLayout />}>
-        <Route index element={<Home />} />
-        <Route element={<RequireAuth />}>
-          <Route path="dashboard" element={<Dashboard />} />
+      <Route element={<RequireAuth />}>
+        <Route element={<AppShell />}>
+          <Route path="dashboard" element={<Overview />} />
           <Route path="report-lost" element={<ReportLost />} />
           <Route path="report-found" element={<ReportFound />} />
           <Route path="matches" element={<Matches />} />
-          <Route path="matches/:id" element={<MatchDetail />} />
+          <Route element={<RequireAuth staff />}>
+            <Route path="staff" element={<Staff />} />
+          </Route>
         </Route>
-        <Route element={<RequireAuth staff />}>
-          <Route path="staff" element={<Staff />} />
-        </Route>
-        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

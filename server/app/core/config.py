@@ -39,7 +39,10 @@ class Settings:
         o.strip() for o in os.getenv(
             "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()])
     image_matching_enabled: bool = field(default_factory=lambda: _bool("IMAGE_MATCHING_ENABLED", True))
-    match_min_score: float = field(default_factory=lambda: float(os.getenv("MATCH_MIN_SCORE", "0")))
+    # Relevance thresholds chosen from the labelled sample data (scripts/evaluate_weights.py):
+    # with an image signal 0.50 keeps 100% of true pairs / 12% of false; without one 0.25 keeps 90% / 25%.
+    match_min_score_image: float = field(default_factory=lambda: float(os.getenv("MATCH_MIN_SCORE_IMAGE", "0.50")))
+    match_min_score_no_image: float = field(default_factory=lambda: float(os.getenv("MATCH_MIN_SCORE_NO_IMAGE", "0.25")))
     max_upload_bytes: int = 5 * 1024 * 1024
     modules_dir: Path = PROJECT_ROOT / "modules"
     jwt_algorithm: str = "HS256"

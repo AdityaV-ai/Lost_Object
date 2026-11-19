@@ -1,26 +1,31 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
-import { ApiError } from "../api/client";
+import { Icon } from "../components/Icon";
+import { Logo, ThemeButton } from "../components/Layout";
+import { errorText } from "../utils";
 
-function Shell({ eyebrow, title, intro, note, children }: { eyebrow: string; title: React.ReactNode; intro: string; note: string; children: React.ReactNode }) {
+function Shell({ title, sub, children }: { title: string; sub: string; children: ReactNode }) {
   return (
-    <div className="auth-page">
-      <Link className="back-home" to="/">← Back to home</Link>
-      <main className="auth-shell">
-        <div className="auth-aside">
-          <Link className="brand brand-light" to="/"><span className="brand-mark">F</span><span>FindBack<small>Campus Lost &amp; Found</small></span></Link>
-          <div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{intro}</p></div>
-          <div className="aside-note">{note}</div>
-        </div>
-        <section className="auth-card">{children}</section>
-      </main>
+    <div className="auth">
+      <div className="auth-top"><Logo /><div className="row"><Link className="btn btn-ghost" to="/">← Home</Link><ThemeButton /></div></div>
+      <main className="card auth-card"><h1>{title}</h1><p className="muted" style={{ textAlign: "center", marginTop: 4 }}>{sub}</p>{children}</main>
     </div>
   );
 }
 
-const fieldErrors = (e: unknown): string =>
-  e instanceof ApiError && e.details.length ? e.details.map(d => d.message).join(" ") : (e as Error).message;
+function Password({ name, label, placeholder, auto }: { name: string; label: string; placeholder: string; auto: string }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label>{label}
+      <div className="pw">
+        <input type={show ? "text" : "password"} name={name} required minLength={name === "password" && auto === "new-password" ? 8 : undefined}
+               autoComplete={auto} placeholder={placeholder} />
+        <button type="button" onClick={() => setShow(s => !s)} aria-label={show ? "Hide password" : "Show password"}><Icon name="eye" size={16} /></button>
+      </div>
+    </label>
+  );
+}
 
 export function Login() {
   const { login } = useAuth();
@@ -34,22 +39,18 @@ export function Login() {
     const f = new FormData(e.currentTarget);
     setBusy(true); setMsg("");
     try { await login(String(f.get("email")), String(f.get("password"))); nav(from, { replace: true }); }
-    catch (err) { setMsg(fieldErrors(err)); }
+    catch (err) { setMsg(errorText(err)); }
     finally { setBusy(false); }
   }
   return (
-    <Shell eyebrow="Welcome back" title={<>Good to see<br />you again.</>}
-      intro="Sign in to manage your reports and review potential matches securely."
-      note="Your reports and matching results are private to your account.">
-      <span className="eyebrow">Your account</span><h2>Log in</h2>
-      <p className="muted">Enter your registered email and password.</p>
+    <Shell title="Log in to FindBack" sub="Manage your reports and review your private matches.">
       <form onSubmit={submit}>
-        <label>Email address<input type="email" name="email" autoComplete="email" required placeholder="you@university.edu" /></label>
-        <label>Password<input type="password" name="password" autoComplete="current-password" required placeholder="Your password" /></label>
-        <div className="form-message error" role="status">{msg}</div>
-        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Signing in…" : <>Log in <span>→</span></>}</button>
+        <label>Email<input type="email" name="email" autoComplete="email" required placeholder="you@university.edu" /></label>
+        <Password name="password" label="Password" placeholder="Your password" auto="current-password" />
+        {msg && <div className="msg error" role="alert">{msg}</div>}
+        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Signing in…" : "Log in"}</button>
       </form>
-      <p className="auth-switch">New to FindBack? <Link to="/register">Create an account</Link></p>
+      <p className="muted" style={{ textAlign: "center", marginTop: 16 }}>New here? <Link to="/register">Create an account</Link></p>
     </Shell>
   );
 }
@@ -63,27 +64,24 @@ export function Register() {
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
-    if (f.get("password") !== f.get("confirm_password")) { setMsg("Passwords do not match."); return; }
+    if (f.get("password") !== f.get("confirm")) { setMsg("Passwords do not match."); return; }
     setBusy(true); setMsg("");
     try { await register(String(f.get("name")), String(f.get("email")), String(f.get("password"))); nav("/dashboard", { replace: true }); }
-    catch (err) { setMsg(fieldErrors(err)); }
+    catch (err) { setMsg(errorText(err)); }
     finally { setBusy(false); }
   }
   return (
-    <Shell eyebrow="A little peace of mind" title={<>Let's bring<br />things back<br />together.</>}
-      intro="Create one account to report items you have lost or found." note="One account works for both owners and finders.">
-      <span className="eyebrow">Get started</span><h2>Create account</h2>
-      <p className="muted">A few details and you're ready to go.</p>
+    <Shell title="Create your account" sub="One account works for reporting lost and found items.">
       <form onSubmit={submit}>
         <label>Full name<input name="name" required autoComplete="name" placeholder="Your full name" /></label>
-        <label>Email address<input type="email" name="email" required autoComplete="email" placeholder="you@university.edu" /></label>
-        <label>Password<input type="password" name="password" minLength={8} required autoComplete="new-password" placeholder="At least 8 characters" /></label>
-        <label>Confirm password<input type="password" name="confirm_password" minLength={8} required autoComplete="new-password" placeholder="Re-enter password" /></label>
-        <div className="form-message error" role="status">{msg}</div>
-        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Creating account…" : <>Create account <span>→</span></>}</button>
+        <label>Email<input type="email" name="email" required autoComplete="email" placeholder="you@university.edu" /></label>
+        <Password name="password" label="Password (8+ characters)" placeholder="At least 8 characters" auto="new-password" />
+        <label>Confirm password<input type="password" name="confirm" required minLength={8} autoComplete="new-password" placeholder="Re-enter password" /></label>
+        {msg && <div className="msg error" role="alert">{msg}</div>}
+        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Creating account…" : "Create account"}</button>
       </form>
-      <p className="auth-switch">Already registered? <Link to="/login">Log in</Link></p>
-      <p className="tiny muted">Staff access is granted separately by the institution. You cannot select an admin role here.</p>
+      <p className="muted" style={{ textAlign: "center", marginTop: 16 }}>Already registered? <Link to="/login">Log in</Link></p>
+      <p className="tiny muted" style={{ textAlign: "center", marginTop: 8 }}>Staff access is granted separately by the institution.</p>
     </Shell>
   );
 }

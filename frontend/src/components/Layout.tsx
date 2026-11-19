@@ -1,61 +1,77 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Navigate, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { useTheme } from "../theme";
+import { Icon } from "./Icon";
 import { Loading } from "./States";
 
-const Brand = () => (
-  <Link className="brand" to="/"><span className="brand-mark">F</span><span>FindBack<small>Campus Lost &amp; Found</small></span></Link>
+export const Logo = ({ to = "/" }: { to?: string }) => (
+  <Link className="logo" to={to}><span className="logo-mark"><Icon name="search" size={15} /></span>FindBack</Link>
 );
 
-export function Header() {
-  const { user, logout } = useAuth();
-  const nav = useNavigate();
+export function ThemeButton() {
+  const { theme, toggle } = useTheme();
   return (
-    <header className="site-header">
-      <Brand />
-      <nav>
-        {user ? (<>
-          <NavLink to="/dashboard">Dashboard</NavLink>
-          <NavLink to="/report-lost">Report lost</NavLink>
-          <NavLink to="/report-found">Report found</NavLink>
-          <NavLink to="/matches">Matches</NavLink>
-          {user.role === "staff" && <NavLink to="/staff">Staff</NavLink>}
-        </>) : (<>
-          <a href="/#how">How it works</a>
-          <NavLink to="/report-lost">Report lost</NavLink>
-          <NavLink to="/report-found">Report found</NavLink>
-        </>)}
-      </nav>
-      <div className="nav-actions">
-        {user ? (<>
-          <span className="user-chip">{user.name}</span>
-          <button className="btn btn-ghost" onClick={() => { logout(); nav("/"); }}>Log out</button>
-        </>) : (<>
-          <Link className="btn btn-ghost" to="/login">Log in</Link>
-          <Link className="btn btn-primary" to="/register">Create account</Link>
-        </>)}
-      </div>
-    </header>
+    <button className="icon-btn" onClick={toggle} aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>
+      <Icon name={theme === "dark" ? "sun" : "moon"} />
+    </button>
   );
 }
 
-export const Footer = () => (
-  <footer className="footer"><div className="wrap footer-inner"><Brand />
-    <p>Helping campus communities reunite with what matters.</p>
-    <span>© FindBack · Institutional recovery platform</span></div></footer>
-);
+const UnreadCtx = createContext<{ count: number; refresh: () => void }>({ count: 0, refresh: () => {} });
+export const useUnread = () => useContext(UnreadCtx);
 
-export function AppLayout() {
-  return (<><Header /><Outlet /><Footer /></>);
+/** Signed-in layout: sidebar + content. */
+export function AppShell() {
+  const { user, logout } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [count, setCount] = useState(0);
+  const refresh = useCallback(() => {
+    api.notifications().then(n => setCount(n.filter(x => !x.is_read).length)).catch(() => {});
+  }, []);
+  useEffect(() => { refresh(); const t = setInterval(refresh, 60_000); return () => clearInterval(t); }, [refresh, loc.pathname]);
+  const value = useMemo(() => ({ count, refresh }), [count, refresh]);
+  if (!user) return null;
+  return (
+    <UnreadCtx.Provider value={value}>
+      <div className="shell">
+        <aside className="sidebar">
+          <Logo to="/dashboard" />
+          <nav aria-label="Main">
+            <NavLink className="nav-link" to="/dashboard" end><Icon name="grid" />Overview</NavLink>
+            <NavLink className="nav-link" to="/matches"><Icon name="inbox" />Matches</NavLink>
+            <NavLink className="nav-link" to="/dashboard?tab=notifications">
+              <Icon name="bell" />Notifications{count > 0 && <span className="badge">{count}</span>}</NavLink>
+            <div className="nav-group">Report</div>
+            <NavLink className="nav-link" to="/report-lost"><Icon name="box" />Lost item</NavLink>
+            <NavLink className="nav-link" to="/report-found"><Icon name="box" />Found item</NavLink>
+            {user.role === "staff" && (<>
+              <div className="nav-group">Staff</div>
+              <NavLink className="nav-link" to="/staff"><Icon name="shield" />Staff workspace</NavLink></>)}
+          </nav>
+          <div className="sidebar-foot">
+            <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
+            <div className="who"><b>{user.name}</b><span className="muted tiny">{user.role === "staff" ? "Staff" : "User"}</span></div>
+            <ThemeButton />
+            <button className="icon-btn" aria-label="Log out" onClick={() => { logout(); nav("/"); }}><Icon name="logout" /></button>
+          </div>
+        </aside>
+        <main className="main"><Outlet /></main>
+      </div>
+    </UnreadCtx.Provider>
+  );
 }
 
 /** Redirects to /login when signed out; optional staff-only gate. */
 export function RequireAuth({ staff = false }: { staff?: boolean }) {
   const { user, loading } = useAuth();
   const loc = useLocation();
-  if (loading) return <main className="page-wrap"><Loading /></main>;
-  if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (loading) return <main className="main"><Loading /></main>;
+  if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
   if (staff && user.role !== "staff") {
-    return <main className="page-wrap"><div className="empty-state"><h3>Staff only</h3><p>You do not have access to this page.</p></div></main>;
+    return <div className="empty"><h3>Staff only</h3><p>You do not have access to this page.</p></div>;
   }
   return <Outlet />;
 }

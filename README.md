@@ -1,6 +1,6 @@
 # FindBack — Campus Lost & Found with AI matching
 
-Owners report lost items, finders report found items (with a photo). The system scores every opposite-side pair with image (OpenCLIP), text (TF-IDF) and location (haversine) similarity, fuses them (missing signals are dropped, not zero-filled), and shows each owner a private ranked list of candidates. Staff confirm physical deposits.
+Owners report lost items (a photo is optional), finders report found items (with a photo). The system scores every opposite-side pair with photo↔photo (OpenCLIP), words↔photo (CLIP, used when the lost report has no photo), text (TF-IDF) and location (haversine) similarity, fuses them (missing signals are dropped, not zero-filled), notifies the owner of relevant candidates, and shows a private ranked list. The owner says "Might be mine" (with optional proof) or "Not mine"; staff verify the claim, confirm deposits and hand the item back. Light and dark themes.
 
 | Part | Folder | Stack |
 |---|---|---|
@@ -9,7 +9,7 @@ Owners report lost items, finders report found items (with a photo). The system 
 | AI modules (team code, unchanged) | `modules/` | scikit-learn, torch, open_clip |
 | Legacy Flask app (kept, deprecated) | `backend/` | Flask — shares the same DB/uploads |
 
-Documentation: [`docs/PROJECT_EXPLANATION.md`](docs/PROJECT_EXPLANATION.md) (start here) · [`ARCHITECTURE`](docs/ARCHITECTURE.md) · [`API_DOCUMENTATION`](docs/API_DOCUMENTATION.md) · [`MIGRATION_REPORT`](docs/MIGRATION_REPORT.md) · [`TESTING_REPORT`](docs/TESTING_REPORT.md)
+Documentation: [`docs/PROJECT_EXPLANATION.md`](docs/PROJECT_EXPLANATION.md) (start here) · [`USE_GUIDE`](docs/USE_GUIDE.md) (install from scratch) · [`ARCHITECTURE`](docs/ARCHITECTURE.md) · [`API_DOCUMENTATION`](docs/API_DOCUMENTATION.md) · [`MIGRATION_REPORT`](docs/MIGRATION_REPORT.md) · [`TESTING_REPORT`](docs/TESTING_REPORT.md) · [`VIDEO_REFERENCE_GAP_ANALYSIS`](docs/VIDEO_REFERENCE_GAP_ANALYSIS.md)
 
 ## Run it (Windows PowerShell)
 
@@ -44,15 +44,17 @@ cd server
 **Tests**
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q      # expect: 36 passed (2 use the real model; they skip if it is unavailable)
 cd ..\frontend
 npm run build      # includes strict TypeScript check
 ```
 
 ## Data & configuration
 
-* Database: the existing SQLite file `backend/instance/lost_object_recovery.db` (override with `DATABASE_URL`). The server only creates missing tables; it never alters or drops anything. Uploads: `backend/uploads/` (`UPLOAD_DIR`).
-* First live image match downloads OpenCLIP weights (~600 MB, needs internet). If unavailable, image matching is disabled and matching continues with text + location. Set `IMAGE_MATCHING_ENABLED=false` to skip it entirely.
+* Database: the existing SQLite file `backend/instance/lost_object_recovery.db` (override with `DATABASE_URL`). On startup the server creates missing tables and **adds missing nullable columns**; it never drops, renames or rewrites existing data. Uploads: `backend/uploads/` (`UPLOAD_DIR`; embeddings cache in `.embeddings/` inside it).
+* The first start downloads OpenCLIP weights (~600 MB, needs internet; loaded in a background thread). If unavailable, image matching is disabled and matching continues with text + location. Set `IMAGE_MATCHING_ENABLED=false` to skip it entirely.
+* Relevance thresholds: `MATCH_MIN_SCORE_IMAGE` (0.50) and `MATCH_MIN_SCORE_NO_IMAGE` (0.25), chosen from the sample data (`python scripts/evaluate_weights.py`).
+* The location picker uses free OpenStreetMap tiles and Nominatim search (no key, needs internet); typing a place name works without it.
 * See `server/.env.example` for all settings. Never commit `.env`.
 
 ## Legacy Flask app

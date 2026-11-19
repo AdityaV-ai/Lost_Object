@@ -1,61 +1,66 @@
 # Testing Report
 
-Date: 2026-11-19 · Windows 11 · Python 3.13.5 · Node 24 · torch 2.15 (CPU), numpy 2.5.5, FastAPI 0.165, SQLAlchemy 2.1.
+Run on Windows 11, Python 3.13.5, Node 24, torch 2.15 (CPU), numpy 2.5.5, FastAPI 0.165, SQLAlchemy 2.1, with the real OpenCLIP ViT-B-32 weights.
 
 ## Summary
 
 | Area | Result |
 |---|---|
-| FastAPI backend starts | ✅ `uvicorn app.main:app`, `/api/v1/health` → ok |
-| Automated API tests (`server/tests`) | ✅ **14 / 14 pass** |
-| Frontend type-check + production build | ✅ `npm run build` (strict TS, 45 modules) |
-| Frontend dev server | ✅ started, proxied `/api` to backend |
-| Browser end-to-end (login → dashboard → matches → detail → interest; found form; staff) | ✅ (details below) |
-| Live OpenCLIP + TF-IDF + haversine matching on real sample photos | ✅ runs; accuracy limited (see below) |
-| Pre-existing tests (`test_offline.py`, fusion tests, `tests/test_sourya_integration.py`, legacy `backend/app/tests`) | ✅ all pass |
-| Legacy Flask app regression | ✅ not modified; its 2 tests pass |
+| Automated tests `server/tests` | ✅ **36 / 36 pass** (34 fast + 2 with the real OpenCLIP model) |
+| Pre-existing tests (`test_offline.py`, fusion tests, `tests/test_sourya_integration.py`, legacy `backend/app/tests`) | ✅ pass (run earlier in this project; the shared modules were not modified) |
+| Frontend strict TypeScript + production build | ✅ `npm run build` |
+| Live server on a copy of the **legacy-schema DB** | ✅ additive migration applied; real DB untouched (all tables 0 rows) |
+| Browser workflow (below) | ✅ |
+| Scenarios 1–5 from the brief | ✅ automated (see mapping) |
 
-## 1. Automated tests — `cd server; .\.venv\Scripts\python.exe -m pytest -q` → `14 passed`
+Command: `cd server; .\.venv\Scripts\python.exe -m pytest -q` (the 2 live tests skip themselves if torch/weights are unavailable; the first run downloads ~600 MB).
 
-Run against a temporary SQLite DB and temp upload dir (the real DB is never touched), with `IMAGE_MATCHING_ENABLED=false`.
+## Acceptance scenarios
 
-Covers: health; register/login/me; duplicate email 409; wrong password 401; register validation 422 with per-field details; missing/garbage token 401; lost report validation (category required, content required), image-only lost report; found report validation (no image, bad custody value, missing item name, non-image bytes, wrong extension); coordinate validation (range, pair, zero is valid); **full workflow** owner/finder/stranger (match created, rank 1, finder sees nothing, stranger 403, 404, interest idempotent + owner-only, recovery-request list, notification read + ownership); self-matching prevented; "missing signal is `None` not 0.0" regression; image access control (owner 200 with PNG bytes, other user 403, anonymous 401, bad kind 422); staff deposit (non-staff 403, pending list, confirm 200, second confirm 409, unknown 404).
+| # | Scenario | Test | What is asserted |
+|---|---|---|---|
+| 1 | Image-based matching, A notified | `test_live_image::test_scenario1…` (real model, team photos) | 5 images encoded exactly once (pairwise would be 8); every match has a real photo score; stored score for the true pair equals the team's offline CSV value (±0.002); ranks 1…n; owner notified (each notification links its match); finder not notified; a second lost report re-uses cached embeddings (1 new encode) |
+| 2 | Lost report without photo | `test_acceptance::test_scenario2…` and `test_live_image::test_scenario2_live…` | `image_similarity` is `null` (never invented); text + location produce the candidate; **live:** description-vs-photo scores equal the team notebook's values (÷0.40, ±0.03), the true pair ranks first; unrelated item produces no match; notification created |
+| 3 | Location-assisted | `test_acceptance::test_scenario3…`, `…location_missing_degrades…` | near item (≈60 m) outranks far item (≈15 km) with identical text; distances reported; with no coordinates the fused score equals the text score (weights renormalised) |
+| 4 | Multiple candidates, no duplicates | `test_acceptance::test_scenario4…`, `…below_threshold…` | ranked descending, ranks 1…n, unrelated item excluded, one match row per pair, exactly one notification per match, re-running matching creates nothing, found-before-lost order also matches |
+| 5 | Privacy and ownership | `test_acceptance::test_scenario5…`, `test_api` access tests | finder email/name never in owner responses (no `user_id`/`email` keys); strangers and the finder get 403 on matches, match photos, claims, notifications, edit, resolve, cancel; owner cannot read another's report photo; staff surfaces 403/401 |
 
-One test initially failed because of my test design (shared DB made a new lost report legitimately match earlier users' found reports); the test was rewritten to assert the real invariant (no match ever pairs a user's own lost and found reports) in the DB.
+Other behaviour covered: claim with proof (whitespace trimmed, idempotent), cancel + re-claim, Not mine / restore / dismiss guard while a claim is open, 5-step timeline, staff verify/reject/complete with invalid transitions (409) and audit log, finder notified on deposit and without owner details, "found it myself", report edit with re-scoring and ownership checks, notifications read-all (own only), staff summary/matches filters/people/reports/log/analytics/CSV (incl. formula neutralisation), date validation, additive migration of a legacy-schema database (data preserved, idempotent).
 
-## 2. Live end-to-end (real server, real model, copy of the real DB)
+Mutation check: with `MATCH_MIN_SCORE_NO_IMAGE=0` six of these tests fail, so the thresholds are really being tested.
 
-Setup: API on port 8000 using a **copy** of `lost_object_recovery.db` and a temp upload dir, `IMAGE_MATCHING_ENABLED=true`. Script registered two users and submitted the team's sample items L001–L005 (lost, with photos, descriptions, coordinates) and F001–F005 (found, with photos) over HTTP.
+## Browser run (Vite dev server → FastAPI on a legacy-schema DB copy, real model, 5 sample reports)
 
-* All 10 reports → 201. 25 match rows created (5×5), all with image, text and location signals present; finder sees 0 matches; ranks 1…5 assigned per lost report.
-* **First image match took 272 s** (one-time download of ~600 MB OpenCLIP weights from Hugging Face + model load). Afterwards ≈ 3–5 s per new report against 5 candidates (~0.7 s/pair, CPU). Image inference runs inside the HTTP request.
-* **Matching quality (team's models, unchanged):** rank-1 equalled the ground-truth pair for 3 of 5 lost items (L001, L003, L005); L002 and L004 ranked the wrong bottle first. All five items are water bottles, which is a hard case; this is a property of the AI modules and fusion weights, not of the migration. A proper evaluation on the full 50-item set was **not** re-run (the team's own results are in `outputs/fusion_results/`).
-* The real DB was verified afterwards: all tables still have 0 rows.
+Seeded through the real API with the team's photos: 3 found items, 1 lost report with a photo (L001), 1 lost report **without** a photo (L002); whole seeding including matching took ≈2 s.
 
-## 3. Browser verification (Vite dev server → FastAPI, Claude browser pane)
+* Light and dark theme, persisted; sidebar with unread badge; Overview stat cards, report cards with thumbnails and the 5-step tracker.
+* Matches: ranked cards with found photo, relevance, label, distance, four signal bars ("—" when unavailable), item details; photo-less L002 shows Photo "—" and Words↔photo 89 %.
+* **Might be mine** → proof dialog → "Pending staff review" box; staff workspace showed the claim with the proof and a Lost vs Found drawer (owner and finder shown to staff only); **Verify owner** → KPIs updated, audit log entry, owner notification "Ownership verified"; its **Open** link jumped to the highlighted match showing "Verified — ready to collect"; tracker showed four steps done.
+* **Not mine** hid the card and persisted; **Show dismissed** brought it back dimmed; **Restore** worked.
+* Location picker: place search (real Nominatim lookup) → pin on a real OpenStreetMap map → coordinates and place name saved with the lost report (verified via the API), date converted to UTC.
+* Deposits tab: card with photo → **Confirm received** → list emptied; handover completed → both reports `RECOVERED`; audit log shows 3 actions.
+* Analytics tab showed live figures (6 matches, bands, claims by status).
 
-* Login page renders with the original design; login as a test user → JWT stored → redirected to `/dashboard`.
-* Dashboard lists lost reports with **access-controlled thumbnails** (fetched with bearer token).
-* `/matches` lists 25 ranked matches with relevance %; `/matches/9` shows score breakdown; **Express interest** → button changes to "Interest submitted (pending)"; the DB/API confirmed `{"id":1,"match_id":9,"status":"PENDING"}`.
-* Found-report form: submitted through the real React form and handler (photo injected via `DataTransfer` because file pickers cannot be driven by the tool) → "Found report submitted. Reference: F006 …".
-* Staff: after `create_staff.py`, `/staff` listed F006 awaiting deposit; **Confirm deposit** → list became empty ("No deposits awaiting confirmation").
+## Matching evaluation (reproducible: `python scripts/evaluate_weights.py`)
 
-## 4. Pre-existing tests
+On the team's labelled sample (55 lost × 50 found, 40 true pairs):
 
-| Test | Result |
+| Question | Result |
 |---|---|
-| `python test_offline.py` (5 tests) | pass |
-| `modules/fusion_module/test_fusion.py`, `test_fusion_missing.py` | pass |
-| `tests/test_sourya_integration.py` | pass |
-| `backend/app/tests` (legacy Flask, run in throwaway venv, temp DB) | 2 passed |
+| Image score scale | Raw cosine (what the team evaluated) ranks the true match first 87.5 % (MRR 0.93); the `(cos+1)/2` mapping the old live code used gives 77.5 % (MRR 0.86). The app now uses raw cosine and reproduces the team's CSV values exactly |
+| Weights 70/20/10 | Kept. 80/10/10 scored slightly higher (top-1 95 %) but on 40 pairs that is within noise; no change made |
+| Lost report without a photo | Text + location only: top-1 **10 %**, top-5 62 %. With CLIP words↔photo in the photo slot (÷0.40): top-1 **95 %**, top-5 **100 %** |
+| Thresholds | With a visual signal: 0.50 keeps 100 % of true pairs / 12 % of false (≈7 candidates per lost report); photo-less words↔photo at 0.50 keeps 100 % / 5.5 %; no visual signal at all: 0.25 keeps 90 % / 25 % |
 
-## 5. Not tested / known gaps
+**Caveats:** the sample has detailed, well-written descriptions and 50 near-identical object categories; real users' descriptions are shorter, so photo-less accuracy will likely be lower. The 0.40 scale and the thresholds were fitted on this same sample, so they are reasonable defaults, not guarantees. Both are configurable (`MATCH_MIN_SCORE_*`).
 
-* **Lost-report form and register/login error rendering in the browser** were not driven manually (same code path as the tested found form and login; API validation is covered by pytest).
-* No automated frontend tests (no Vitest/Playwright) — build + manual browser pass only.
-* Mobile/responsive layout, accessibility audit, cross-browser: not checked.
-* No load/performance tests; model inference is synchronous per request.
-* Image matching with weights *unavailable* (offline) was reasoned from code and not exercised.
-* Production deployment (HTTPS, reverse proxy, rate limiting) not tested. Python 3.11/3.12 not tested (3.13 only).
-* Clean-room install of `server/requirements.txt` into a fresh venv was done and used for all tests above; the `frontend` was installed with `npm install` (no lockfile review).
-* The server tests emit a PyJWT warning about a short HMAC key — test-only; production must set a long `SECRET_KEY` (≥ 32 bytes).
+## Not tested / known gaps
+
+* No automated frontend tests (build + manual browser pass only). The found-report form and the staff "Mark as handed over" button were exercised through the API and the earlier UI build, not re-clicked in this final build; Edit modal and "Found it myself" buttons are covered by API tests only.
+* Mobile layout, accessibility audit and other browsers were not checked. Only Python 3.13 was tested.
+* "My location" (browser geolocation) was not exercised (needs a permission prompt).
+* The map and place search need internet access (OpenStreetMap tiles, Nominatim); without it the form still works by typing a place name.
+* No load testing. Matching runs inside the request; with cached embeddings it was ≈2 s for the seeding above, but a very large report base will need a background worker.
+* Offline behaviour of image matching (no weights) was reasoned from the code, not exercised.
+* Email/push notifications, multiple photos per report, auto-detected item type/colours/OCR, drop-point management and a "flagged/suspicious" rule are **not implemented** (see `VIDEO_REFERENCE_GAP_ANALYSIS.md`).
+* Production deployment concerns (HTTPS, rate limiting, token refresh/revocation, backups) are not tested.

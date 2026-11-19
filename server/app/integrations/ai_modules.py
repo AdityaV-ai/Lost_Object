@@ -23,7 +23,6 @@ from location_similarity import calculate_distance, calculate_location_similarit
 from text_similarity import compare_pair  # noqa: E402
 
 _image_disabled = False
-_image_fn = None
 
 
 def fuse(image, text, location):
@@ -44,6 +43,12 @@ def text_score(lost_text: str, found_text: str, lost_code: str, found_code: str)
     return float(r["text_similarity"]) if r["text_available"] else None
 
 
+def distance_m(lat1, lon1, lat2, lon2):
+    if any(v is None for v in (lat1, lon1, lat2, lon2)):
+        return None
+    return float(calculate_distance(lat1, lon1, lat2, lon2))
+
+
 def location_score(lat1, lon1, lat2, lon2):
     if any(v is None for v in (lat1, lon1, lat2, lon2)):
         return None
@@ -51,20 +56,26 @@ def location_score(lat1, lon1, lat2, lon2):
 
 
 def image_score(lost_file: Path, found_file: Path):
-    """Live OpenCLIP similarity in [0,1], or None if unavailable."""
-    global _image_disabled, _image_fn
+    """Live OpenCLIP photo-vs-photo similarity in [0,1] (cached embeddings), or None if unavailable."""
+    return _visual(lambda ie: ie.similarity(lost_file, found_file), lost_file, found_file)
+
+
+def words_photo_score(text: str, found_file: Path):
+    """Live OpenCLIP description-vs-photo similarity in [0,1], or None if unavailable."""
+    if not text.strip():
+        return None
+    return _visual(lambda ie: ie.words_photo_similarity(text, found_file), found_file)
+
+
+def _visual(fn, *files: Path):
+    global _image_disabled
     if _image_disabled or not settings.image_matching_enabled:
         return None
-    if not (lost_file.is_file() and found_file.is_file()):
+    if not all(f.is_file() for f in files):
         return None
     try:
-        if _image_fn is None:
-            root = str(settings.modules_dir.parent)
-            if root not in sys.path:
-                sys.path.insert(0, root)
-            from modules.image_module.image_matcher import image_similarity
-            _image_fn = image_similarity
-        value = float(_image_fn(str(lost_file), str(found_file)))
+        from app.integrations import image_embeddings
+        value = fn(image_embeddings)
     except ImportError:
         log.warning("Image matching disabled: torch/open_clip not installed.")
         _image_disabled = True

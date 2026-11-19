@@ -75,3 +75,34 @@ docs/*.md · README.md · .gitignore
 * Security hardening still advised: rate limiting on auth/uploads, HTTPS, token refresh/revocation, upload scanning, audit log of staff actions, email verification (`is_verified` is stored but unused).
 * No Alembic migrations, no CI, no frontend automated tests.
 * The legacy `backend/` stays in the repo; delete it (and the stale `*_STATUS.md` files at the root) once you are satisfied.
+
+
+---
+
+# Phase 2 — product completion (matching, recovery lifecycle, staff workspace, new UI)
+
+Driven by the product brief and the reference video (`VIDEO_REFERENCE_GAP_ANALYSIS.md`). The architecture was kept (FastAPI + React + SQLAlchemy + the team's modules).
+
+## Verified findings that changed the code
+* **Image scale mismatch:** the team evaluated raw cosine, but the live code used `(cos+1)/2`. Corrected (`image_embeddings.py`); the cached score now equals the team's CSV values exactly. Ranking accuracy on the sample: 77.5 % → 87.5 %.
+* **No-photo reports matched badly** (top-1 10 %). The team's own CLIP words↔photo signal, used in the photo slot, lifts it to 95 % on the sample.
+* **Weights 70/20/10 kept**; thresholds now come from data (0.50 with a visual signal, 0.25 without).
+* **Performance:** both photos were re-embedded for every pair; each photo is now embedded once (memory + disk cache).
+
+## Backend
+* `integrations/image_embeddings.py` (cache, words↔photo, warm-up thread); matching rewritten around relevance thresholds, `rescore_report` (after edits), one notification per match linked via `notifications.match_id`.
+* Claim lifecycle `PENDING → VERIFIED → COMPLETED / REJECTED / CANCELLED` with `proof`, `verified_at`, `completed_at`; "Not mine" (`match_results.dismissed`); report timeline, edit, resolve; mark-all-read; finder notifications that never reveal the owner.
+* Staff: summary, analytics, claims (with filters/search), deposits, matching activity, people, reports, audit log (`staff_actions`), CSV export. Routes moved to `api/staff.py`; logic in `services/staff_service.py`; owner-side logic in `services/portal_service.py`.
+* Additive schema changes only (see ARCHITECTURE.md); applied by `init_db`, tested on a legacy-schema database.
+* **Breaking API changes** (the API is new, no external consumers known): staff action `approve` → `verify`; claim status `APPROVED` → `VERIFIED`; `MATCH_MIN_SCORE` env var replaced by `MATCH_MIN_SCORE_IMAGE` and `MATCH_MIN_SCORE_NO_IMAGE`.
+
+## Frontend (rewritten, not patched)
+New light/dark design system and sidebar shell; landing page; Overview with stat cards and the 5-step tracker; Matches page; stepper-style report forms with a free OpenStreetMap location picker; staff workspace with seven tabs. The old pages (`Home`, `Dashboard`) were replaced; the legacy HTML app in `backend/` still has its own UI.
+
+## Files added / changed
+Added: `server/app/integrations/image_embeddings.py`, `server/app/api/staff.py`, `server/app/services/staff_service.py`, `server/tests/test_acceptance.py`, `test_lifecycle.py`, `test_live_image.py`, `server/scripts/evaluate_weights.py`, `frontend/src/{theme.tsx,utils.ts}`, `components/{Icon,Modal,LocationPicker,Widgets}.tsx`, `pages/{Landing,Overview}.tsx`, `docs/VIDEO_REFERENCE_GAP_ANALYSIS.md`.
+Rewritten: `server/app/{models,schemas}.py`, `api/v1.py`, `services/{matching,portal,report}_service.py`, `core/config.py` (thresholds), `db/session.py` (additive migration), all frontend pages, `styles.css`, `client.ts`, `types.ts`, `Layout.tsx`, `States.tsx`, `SecureImage.tsx`.
+Not touched: `modules/`, `data/`, `outputs/`, legacy `backend/`.
+
+## Remaining work
+Email/push; several photos per report; upload-time auto-detection and OCR; drop-point management; fraud flagging; a campus-places list; background matching worker for large volumes; rate limiting, HTTPS, token revocation; Alembic migrations; frontend automated tests; threshold/scale re-validation on real user data.

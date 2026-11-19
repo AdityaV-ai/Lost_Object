@@ -47,6 +47,7 @@ class LostReport(Base):
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"))
     status: Mapped[str] = mapped_column(String(30), default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime)  # when it was lost (added column)
     user: Mapped[User] = relationship()
     location: Mapped[Location | None] = relationship()
 
@@ -60,10 +61,14 @@ class FoundReport(Base):
     category: Mapped[str] = mapped_column(String(100))
     description: Mapped[str | None] = mapped_column(Text)
     image_path: Mapped[str] = mapped_column(String(500))
+    # colour / distinguishing_features were added after the legacy schema (nullable, added by init_db)
+    colour: Mapped[str | None] = mapped_column(String(80))
+    distinguishing_features: Mapped[str | None] = mapped_column(Text)
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"))
     custody_status: Mapped[str] = mapped_column(String(40), default="LEFT_WHERE_FOUND")
     status: Mapped[str] = mapped_column(String(30), default="ACTIVE")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    occurred_at: Mapped[datetime | None] = mapped_column(DateTime)  # when it was found (added column)
     user: Mapped[User] = relationship()
     location: Mapped[Location | None] = relationship()
 
@@ -80,6 +85,9 @@ class MatchResult(Base):
     fusion_score: Mapped[float | None] = mapped_column(Float)
     rank: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # added columns: CLIP description-vs-photo score (used when the lost report has no photo), owner "Not mine"
+    words_photo_similarity: Mapped[float | None] = mapped_column(Float)
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
     lost_report: Mapped[LostReport] = relationship()
     found_report: Mapped[FoundReport] = relationship()
 
@@ -89,8 +97,12 @@ class RecoveryRequest(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     match_id: Mapped[int] = mapped_column(ForeignKey("match_results.id"))
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    # PENDING -> VERIFIED -> COMPLETED ; PENDING -> REJECTED ; PENDING/VERIFIED -> CANCELLED (owner)
     status: Mapped[str] = mapped_column(String(30), default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    proof: Mapped[str | None] = mapped_column(Text)          # owner-provided details for staff (added column)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class Notification(Base):
@@ -100,5 +112,20 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(160))
     message: Mapped[str] = mapped_column(Text)
     related_report_id: Mapped[int | None] = mapped_column(Integer)
+    match_id: Mapped[int | None] = mapped_column(Integer)  # added after the legacy schema
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class StaffAction(Base):
+    """Audit trail of staff actions (new table)."""
+    __tablename__ = "staff_actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(40))       # e.g. CLAIM_VERIFIED, DEPOSIT_CONFIRMED
+    target_type: Mapped[str] = mapped_column(String(20))  # claim | found | lost
+    target_id: Mapped[int] = mapped_column(Integer)
+    code: Mapped[str | None] = mapped_column(String(20))  # report code for display
+    detail: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    staff: Mapped[User] = relationship()

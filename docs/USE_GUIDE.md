@@ -10,13 +10,14 @@
 
 * **Owner** registers, reports a lost item (category + at least one of: name, description, photo; optional colour, brand, model, location, coordinates).
 * **Finder** reports a found item (photo, category, name, and where the item is now: left where found / temporarily holding / deposited at a drop point awaiting staff confirmation).
-* Whenever a report is created, the backend scores it against every opposite-side report from a *different* user using three signals and fuses them into one relevance score:
-  * **Image**: OpenCLIP (ViT-B-32) cosine similarity of the two photos
-  * **Text**: TF-IDF cosine similarity of cleaned descriptions
+* Whenever a report is created, the backend scores it against every opposite-side report from a *different* user using these signals and fuses them into one relevance score:
+  * **Photo ↔ photo**: OpenCLIP (ViT-B-32) cosine similarity of the two photos (each photo is embedded once and cached)
+  * **Words ↔ photo**: if the lost report has **no photo**, the written description is compared with the found photo (CLIP text encoder); this takes the photo slot
+  * **Text ↔ text**: TF-IDF cosine similarity of names, categories, colours, brands, features
   * **Location**: distance-based score from latitude/longitude (needs coordinates)
-  * **Fusion**: weights image 0.70 / text 0.20 / location 0.10; a missing signal is dropped and the rest are renormalised.
-* The owner sees a private ranked list of candidate matches, opens one, and clicks **Express interest** (creates a PENDING recovery request).
-* **Staff** (a special role) confirm that a found item was physically deposited.
+  * **Fusion**: visual 0.70 / text 0.20 / location 0.10; a missing signal is dropped and the rest are renormalised. Only relevant candidates (score ≥ 0.50 with a visual signal, ≥ 0.25 without) are kept.
+* The owner is notified in the app, sees a private ranked list of candidates, and presses **Might be mine** (optionally adding proof only staff can see) or **Not mine**. The progress tracker follows: submitted → match found → claimed → staff verified → returned.
+* **Staff** (a special role) verify or reject claims, confirm deposits, hand items back, and see analytics, matching activity and an audit log.
 * The score is a *relevance* score, not proof of ownership. Finder details/photos are never shown to owners.
 
 ## 2. Architecture in one minute
@@ -99,28 +100,29 @@ Open **http://localhost:5173**. The page talks to the backend through the `/api`
 
 ## 7. Using the app
 
-1. Click **Create account**, register (password ≥ 8 chars) and you land on the dashboard.
+1. Click **Sign up**, register (password ≥ 8 chars) and you land on the Overview. Use the moon/sun button to switch light/dark theme.
 2. Use a **second account** (e.g. in a private/incognito window) to report the *other* side. Matches are only created between **different users**.
-3. Account A: **Report lost** (with a photo). Account B: **Report found** (photo required, pick a custody status).
-4. Account A: **Matches** shows the ranked candidates. Open one, then **Express interest**.
-5. Sample photos and descriptions for testing are in `data/Images` and `data/items.csv` (`L001.jpg` = lost, `F001.jpg` = found; L001↔F001 is a true pair).
+3. Account A: **Lost item** (a photo is optional; add colour, brand, features, and pin the place on the map). Account B: **Found item** (photo required, pick where the item is now).
+4. Account A: the bell shows a notification; **Matches** lists ranked candidates with photo, relevance, signal bars and details. Press **Might be mine** (type some proof) or **Not mine** (use *Show dismissed* to bring it back). The Overview tracker advances.
+5. Staff account: **Staff workspace → Recovery requests** shows the claim with the proof; **View details** shows lost vs found side by side; **Verify owner**, then **Mark as handed over**. Account A is notified at each step.
+6. Sample photos and descriptions for testing are in `data/Images` and `data/items.csv` (`L001.jpg` = lost, `F001.jpg` = found; L001↔F001 is a true pair). Try a lost report **without** a photo and the description from `items.csv` to see the words↔photo signal.
 
-**Image matching note:** the first report that triggers image comparison downloads the OpenCLIP model (~600 MB) and can take several minutes. Later ones take about a second. If the download fails or torch is unavailable, the app keeps working using text and location only (the log shows a warning). To skip image matching entirely set `IMAGE_MATCHING_ENABLED=false` in `server\.env` and restart the backend.
+**Image matching note:** the first start downloads the OpenCLIP model (~600 MB, a few minutes) in the background; wait for the log line `OpenCLIP model ready.` before your first image report. After that a new report is matched in about a second. If the download fails or torch is unavailable, the app keeps working using text and location only (the log shows a warning). To skip image matching entirely set `IMAGE_MATCHING_ENABLED=false` in `server\.env` and restart the backend.
 
-**Location note:** a location score is only produced when both reports have latitude and longitude (the lost form has optional latitude/longitude inputs; the found form has a free-text place only).
+**Location note:** a location score is only produced when both reports have coordinates. Both forms have a map picker (OpenStreetMap, free, no key): search a place, click the map or use *My location*. Without internet you can still type a place name; that report just gets no location score.
 
 ### Create a staff account
 Staff cannot self-register. Register the account normally first, then (from the `server` folder, backend can stay running):
 ```powershell
 .\.venv\Scripts\python.exe scripts\create_staff.py your@email.com
 ```
-Refresh the app: a **Staff** link appears. It lists found items awaiting deposit confirmation and lets you confirm them.
+Refresh the app: a **Staff workspace** link appears (claims, deposits, reports, people, matching activity, analytics, audit log, CSV exports).
 
 ## 8. Run the tests / build (optional)
 
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m pytest -q          # expect: 14 passed
+.\.venv\Scripts\python.exe -m pytest -q          # expect: 36 passed (2 use the real model)
 cd ..\frontend
 npm run build                                     # strict TypeScript check + production build into frontend\dist
 ```
@@ -135,7 +137,8 @@ npm run build                                     # strict TypeScript check + pr
 | `ACCESS_TOKEN_MINUTES` | Login lifetime | 720 |
 | `CORS_ORIGINS` | Allowed browser origins | `http://localhost:5173,http://127.0.0.1:5173` |
 | `IMAGE_MATCHING_ENABLED` | Use OpenCLIP image matching | true |
-| `MATCH_MIN_SCORE` | Ignore candidates below this fused score | 0 |
+| `MATCH_MIN_SCORE_IMAGE` | Minimum fused score to keep a candidate when a visual signal exists | 0.50 |
+| `MATCH_MIN_SCORE_NO_IMAGE` | Same, when there is no visual signal (text/location only) | 0.25 |
 
 Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (API origin for a separately hosted build; leave empty in dev) and `VITE_PROXY_TARGET` (dev proxy target, default `http://127.0.0.1:8000`).
 
@@ -149,16 +152,16 @@ Frontend (`frontend/.env`, optional): `VITE_API_BASE_URL` (API origin for a sepa
 | Page loads but login says "Cannot reach the server" | Backend (Terminal 1) not running, or wrong port |
 | `/health` works but the first image match hangs for minutes | One-time model download; wait. Watch Terminal 1 |
 | Image similarity always empty | Model could not load (offline/torch missing); check backend log for "Image matching disabled" |
-| No matches appear | Both reports must come from **different users**; need text or coordinates/photos to score; check `MATCH_MIN_SCORE` is 0 |
+| No matches appear | Both reports must come from **different users**; the pair must reach the relevance threshold (0.50 / 0.25); very different items are deliberately not matched. Lower `MATCH_MIN_SCORE_*` to see weaker candidates |
 | Logged out after each backend restart | `SECRET_KEY` empty in `.env` |
 | 401 after being staff-promoted | Reload the page; role is read from the database on each request |
 | `npm install` errors | Check Node ≥ 18 (`node --version`); delete `frontend\node_modules` and retry |
 
 ## 11. API quick reference
-Base `http://127.0.0.1:8000/api/v1`. Auth: `Authorization: Bearer <token>` from `/auth/login`. Main endpoints: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `POST /reports/lost`, `POST /reports/found` (multipart), `GET /reports/mine`, `GET /reports/{lost|found}/{id}/image`, `GET /matches`, `GET /matches/{id}`, `POST /matches/{id}/interest`, `GET /recovery-requests`, `GET /notifications`, `POST /notifications/{id}/read`, `GET /staff/found/pending-deposits`, `POST /staff/found/{id}/confirm-deposit`, `GET /health`. Full details: `docs/API_DOCUMENTATION.md` or http://127.0.0.1:8000/docs.
+Base `http://127.0.0.1:8000/api/v1`. Auth: `Authorization: Bearer <token>` from `/auth/login`. Main endpoints: `POST /auth/register|login`, `GET /auth/me`, `POST /reports/lost|found` (multipart), `GET /reports/mine`, `PATCH /reports/{lost|found}/{id}`, `POST /reports/lost/{id}/resolve`, `GET /matches`, `POST /matches/{id}/interest|dismiss|restore`, `GET /matches/{id}/images/{lost|found}`, `GET /recovery-requests`, `POST /recovery-requests/{id}/cancel`, `GET /notifications`, `POST /notifications/read-all`, staff: `GET /staff/summary|analytics|recovery-requests|matches|people|reports|log`, `POST /staff/recovery-requests/{id}/verify|reject|complete`, `POST /staff/found/{id}/confirm-deposit`, `GET /health`. Full details: `docs/API_DOCUMENTATION.md` or http://127.0.0.1:8000/docs.
 
 ## 12. Data safety
 The database is a single SQLite file (`backend/instance/lost_object_recovery.db`) and photos are in `backend/uploads/`. Back both up before experimenting. The backend only *creates missing tables*; it never drops or alters existing data. Do not commit `.env` files.
 
 ## 13. Known limitations
-Staff ownership-review/handover, finder notifications and OCR-from-photo are not implemented; matching runs inside the web request (slow for very large volumes); match accuracy is moderate (3 of 5 top-ranked correct on a hard same-category sample). See `docs/MIGRATION_REPORT.md` and `docs/TESTING_REPORT.md`.
+Not implemented: email/push notifications, several photos per report, auto-detection of item type/colours or OCR from the photo, drop-point management, fraud flagging. Matching runs inside the web request (fine with cached embeddings, slow for very large volumes). On the team's 55×50 sample the true item ranked first 87.5 % of the time with photos and 95 % for photo-less reports using words↔photo; real-world accuracy will differ. See `docs/MIGRATION_REPORT.md` and `docs/TESTING_REPORT.md`.

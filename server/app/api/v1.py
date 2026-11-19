@@ -1,19 +1,21 @@
-"""All /api/v1 routes. Handlers only parse input, call a service, and shape the response."""
+"""All /api/v1 routes except staff. Handlers only parse input, call a service, and shape the response."""
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
-from app.api.deps import DB, CurrentUser, StaffUser
+from app.api import staff
+from app.api.deps import DB, CurrentUser
 from app.core.errors import unprocessable
-from app.schemas import (FoundReportIn, LoginIn, LostReportIn, MatchOut, MyReportsOut, NotificationOut,
-                         OkOut, PendingDepositOut, RecoveryRequestOut, RegisterIn, ReportCreated, TokenOut,
-                         UserOut)
 from app.core.security import create_access_token
+from app.schemas import (ClaimIn, FoundReportIn, FoundReportPatch, LoginIn, LostReportIn, LostReportPatch, MatchOut,
+                         MyReportsOut, NotificationOut, OkOut, RecoveryRequestOut, RegisterIn, ReportCreated,
+                         ReportOut, TokenOut, UserOut)
 from app.services import auth_service, portal_service, report_service
 
 router = APIRouter(prefix="/api/v1")
+router.include_router(staff.router)
 Txt = Annotated[str | None, Form()]
 
 
@@ -50,11 +52,12 @@ def me(user: CurrentUser):
 async def create_lost(db: DB, user: CurrentUser, category: Txt = None, item_name: Txt = None,
                       description: Txt = None, colour: Txt = None, brand: Txt = None, model: Txt = None,
                       distinguishing_features: Txt = None, location: Txt = None, latitude: Txt = None,
-                      longitude: Txt = None, image: Annotated[UploadFile | None, File()] = None):
+                      longitude: Txt = None, occurred_at: Txt = None,
+                      image: Annotated[UploadFile | None, File()] = None):
     data = _validate(LostReportIn, dict(
         category=category, item_name=item_name, description=description, colour=colour, brand=brand,
         model=model, distinguishing_features=distinguishing_features, location=location,
-        latitude=latitude, longitude=longitude))
+        latitude=latitude, longitude=longitude, occurred_at=occurred_at))
     report, n = await report_service.create_lost(db, user, data, image)
     return ReportCreated(message="Lost item reported successfully", report_code=report.report_code,
                          matches_created=n)
@@ -62,12 +65,14 @@ async def create_lost(db: DB, user: CurrentUser, category: Txt = None, item_name
 
 @router.post("/reports/found", response_model=ReportCreated, status_code=201, tags=["reports"])
 async def create_found(db: DB, user: CurrentUser, category: Txt = None, item_name: Txt = None,
-                       description: Txt = None, custody_status: Txt = None, location: Txt = None,
-                       latitude: Txt = None, longitude: Txt = None,
+                       description: Txt = None, colour: Txt = None, distinguishing_features: Txt = None,
+                       custody_status: Txt = None, location: Txt = None,
+                       latitude: Txt = None, longitude: Txt = None, occurred_at: Txt = None,
                        image: Annotated[UploadFile | None, File()] = None):
     data = _validate(FoundReportIn, dict(
-        category=category, item_name=item_name, description=description, custody_status=custody_status,
-        location=location, latitude=latitude, longitude=longitude))
+        category=category, item_name=item_name, description=description, colour=colour,
+        distinguishing_features=distinguishing_features, custody_status=custody_status,
+        location=location, latitude=latitude, longitude=longitude, occurred_at=occurred_at))
     report, n = await report_service.create_found(db, user, data, image)
     return ReportCreated(message="Found item reported successfully", report_code=report.report_code,
                          custody_status=report.custody_status, matches_created=n)
@@ -79,6 +84,23 @@ def my_reports(db: DB, user: CurrentUser):
     return MyReportsOut(lost=lost, found=found)
 
 
+@router.patch("/reports/lost/{report_id}", response_model=ReportOut, tags=["reports"])
+def edit_lost(report_id: int, body: LostReportPatch, db: DB, user: CurrentUser):
+    return report_service.edit_report(db, user, "lost", report_id, body)
+
+
+@router.patch("/reports/found/{report_id}", response_model=ReportOut, tags=["reports"])
+def edit_found(report_id: int, body: FoundReportPatch, db: DB, user: CurrentUser):
+    return report_service.edit_report(db, user, "found", report_id, body)
+
+
+@router.post("/reports/lost/{report_id}/resolve", response_model=OkOut, tags=["reports"])
+def resolve_lost(report_id: int, db: DB, user: CurrentUser):
+    """'Found it myself': closes the report."""
+    report_service.resolve_lost(db, user, report_id)
+    return OkOut()
+
+
 @router.get("/reports/{kind}/{report_id}/image", tags=["reports"],
             responses={200: {"content": {"image/*": {}}}})
 def report_image(kind: str, report_id: int, db: DB, user: CurrentUser):
@@ -87,10 +109,10 @@ def report_image(kind: str, report_id: int, db: DB, user: CurrentUser):
     return FileResponse(report_service.image_file(db, user, kind, report_id))
 
 
-# ---------------- matches / recovery ----------------
+# ---------------- matches / claims ----------------
 @router.get("/matches", response_model=list[MatchOut], tags=["matches"])
-def list_matches(db: DB, user: CurrentUser):
-    return portal_service.list_matches(db, user)
+def list_matches(db: DB, user: CurrentUser, include_dismissed: bool = False):
+    return portal_service.list_matches(db, user, include_dismissed)
 
 
 @router.get("/matches/{match_id}", response_model=MatchOut, tags=["matches"])
@@ -98,15 +120,41 @@ def get_match(match_id: int, db: DB, user: CurrentUser):
     return portal_service.get_match(db, user, match_id)
 
 
+@router.get("/matches/{match_id}/images/{which}", tags=["matches"],
+            responses={200: {"content": {"image/*": {}}}})
+def match_image(match_id: int, which: str, db: DB, user: CurrentUser):
+    """Photo of the lost or found report in a match; only for the lost-item owner (or staff)."""
+    if which not in ("lost", "found"):
+        raise unprocessable("which must be 'lost' or 'found'.")
+    return FileResponse(portal_service.match_image(db, user, match_id, which))
+
+
 @router.post("/matches/{match_id}/interest", response_model=RecoveryRequestOut, status_code=201, tags=["matches"])
-def interest(match_id: int, db: DB, user: CurrentUser):
-    req, _created = portal_service.express_interest(db, user, match_id)
+def interest(match_id: int, db: DB, user: CurrentUser, body: ClaimIn | None = None):
+    """'Might be mine': opens a claim for staff to verify. `proof` = details only the owner would know."""
+    req, _created = portal_service.express_interest(db, user, match_id, body.proof if body else None)
     return req
+
+
+@router.post("/matches/{match_id}/dismiss", response_model=MatchOut, tags=["matches"])
+def dismiss(match_id: int, db: DB, user: CurrentUser):
+    """'Not mine'."""
+    return portal_service.dismiss(db, user, match_id, True)
+
+
+@router.post("/matches/{match_id}/restore", response_model=MatchOut, tags=["matches"])
+def restore(match_id: int, db: DB, user: CurrentUser):
+    return portal_service.dismiss(db, user, match_id, False)
 
 
 @router.get("/recovery-requests", response_model=list[RecoveryRequestOut], tags=["matches"])
 def recovery_requests(db: DB, user: CurrentUser):
     return portal_service.list_recovery_requests(db, user)
+
+
+@router.post("/recovery-requests/{request_id}/cancel", response_model=RecoveryRequestOut, tags=["matches"])
+def cancel_claim(request_id: int, db: DB, user: CurrentUser):
+    return portal_service.cancel_claim(db, user, request_id)
 
 
 # ---------------- notifications ----------------
@@ -115,19 +163,13 @@ def notifications(db: DB, user: CurrentUser):
     return portal_service.list_notifications(db, user)
 
 
-@router.post("/notifications/{notification_id}/read", response_model=OkOut, tags=["notifications"])
-def read_notification(notification_id: int, db: DB, user: CurrentUser):
-    portal_service.mark_notification_read(db, user, notification_id)
+@router.post("/notifications/read-all", response_model=OkOut, tags=["notifications"])
+def read_all(db: DB, user: CurrentUser):
+    portal_service.mark_all_read(db, user)
     return OkOut()
 
 
-# ---------------- staff ----------------
-@router.get("/staff/found/pending-deposits", response_model=list[PendingDepositOut], tags=["staff"])
-def pending_deposits(db: DB, _: StaffUser):
-    return portal_service.pending_deposits(db)
-
-
-@router.post("/staff/found/{report_id}/confirm-deposit", response_model=OkOut, tags=["staff"])
-def confirm_deposit(report_id: int, db: DB, _: StaffUser):
-    portal_service.confirm_deposit(db, report_id)
+@router.post("/notifications/{notification_id}/read", response_model=OkOut, tags=["notifications"])
+def read_notification(notification_id: int, db: DB, user: CurrentUser):
+    portal_service.mark_notification_read(db, user, notification_id)
     return OkOut()
