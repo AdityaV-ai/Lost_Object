@@ -528,3 +528,18 @@ class Analytics(BaseModel):
     reports_by_category: list[dict]
     matches_by_score_band: dict[str, int]
     reports_per_day: list[dict]
+    # extended insights (all computed live from the database on every request)
+    generated_at: datetime | None = None
+    range_days: int = 14
+    funnel: list[dict] = []                    # claim pipeline: stage, count, share of submitted
+    decision_rate: dict = {}                   # approved / rejected / approval_rate (decided claims only)
+    review_times: dict = {}                    # avg hours to first staff response, oldest waiting claim
+    match_quality: dict = {}                   # avg / high-confidence share / conversion to claims
+    evidence_stats: dict = {}                  # claims with evidence, evidence requests
+    report_status: dict = {}                   # lost / found by status
+    custody: dict[str, int] = {}               # found items by custody
+    top_locations: list[dict] = []             # busiest places (lost + found)
+    weekday: list[dict] = []                   # reports by day of week
+    hours: list[dict] = []                     # reports by hour of day
+    staff_workload: list[dict] = []            # staff actions per person
+    open_aging: dict[str, int] = {}            # active reports by age bucket

@@ -44,6 +44,7 @@ export function AppShell() {
             <NavLink className="nav-link" to="/matches"><Icon name="inbox" />Matches</NavLink>
             <NavLink className="nav-link" to="/dashboard?tab=notifications">
               <Icon name="bell" />Notifications{count > 0 && <span className="badge">{count}</span>}</NavLink>
+            <NavLink className="nav-link" to="/profile"><Icon name="user" />My profile</NavLink>
             <div className="nav-group">Report</div>
             <NavLink className="nav-link" to="/report-lost"><Icon name="box" />Lost item</NavLink>
             <NavLink className="nav-link" to="/report-found"><Icon name="box" />Found item</NavLink>
@@ -52,7 +53,7 @@ export function AppShell() {
               <NavLink className="nav-link" to="/staff"><Icon name="shield" />Staff workspace</NavLink></>)}
           </nav>
           <div className="sidebar-foot">
-            <div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div>
+            <Link to="/profile" className="avatar" aria-label="My profile" style={{ textDecoration: "none" }}>{user.name.slice(0, 1).toUpperCase()}</Link>
             <div className="who"><b>{user.name}</b><span className="muted tiny">{user.role === "staff" ? "Staff" : "User"}</span></div>
             <ThemeButton />
             <button className="icon-btn" aria-label="Log out" onClick={() => { logout(); nav("/"); }}><Icon name="logout" /></button>

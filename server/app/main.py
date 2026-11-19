@@ -13,6 +13,11 @@ from app.db.session import init_db
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    if settings.demo_accounts:
+        from app.db.session import SessionLocal
+        from app.services.demo_accounts import seed_demo_accounts
+        with SessionLocal() as db:
+            seed_demo_accounts(db)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     if settings.image_matching_enabled:  # load the model in the background so the first report isn't slow
         import threading

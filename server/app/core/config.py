@@ -43,6 +43,7 @@ class Settings:
     # with an image signal 0.50 keeps 100% of true pairs / 12% of false; without one 0.25 keeps 90% / 25%.
     match_min_score_image: float = field(default_factory=lambda: float(os.getenv("MATCH_MIN_SCORE_IMAGE", "0.50")))
     match_min_score_no_image: float = field(default_factory=lambda: float(os.getenv("MATCH_MIN_SCORE_NO_IMAGE", "0.25")))
+    demo_accounts: bool = field(default_factory=lambda: _bool("DEMO_ACCOUNTS", True))  # shared test logins, dev only
     max_upload_bytes: int = 5 * 1024 * 1024
     modules_dir: Path = PROJECT_ROOT / "modules"
     jwt_algorithm: str = "HS256"

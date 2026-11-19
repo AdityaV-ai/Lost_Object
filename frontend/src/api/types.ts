@@ -84,6 +84,35 @@ export interface Analytics {
   totals: Record<string, number>; recovery_rate: number | null; avg_hours_to_complete: number | null;
   claims_by_status: Record<string, number>; reports_by_category: { category: string; lost: number; found: number }[];
   matches_by_score_band: Record<string, number>; reports_per_day: { date: string; lost: number; found: number }[];
+  generated_at: string | null; range_days: number;
+  funnel: { stage: string; count: number; share: number | null }[];
+  decision_rate: { approved?: number; rejected?: number; cancelled?: number; approval_rate?: number | null };
+  review_times: { avg_hours_to_first_response?: number | null; waiting_for_review?: number; oldest_waiting_hours?: number | null };
+  match_quality: { avg_score?: number | null; high_confidence?: number; high_confidence_share?: number | null; dismissed?: number; claim_conversion?: number | null };
+  evidence_stats: { claims_with_evidence?: number; share_with_evidence?: number | null; evidence_requested?: number };
+  report_status: { lost: Record<string, number>; found: Record<string, number> };
+  custody: Record<string, number>; top_locations: { place: string; count: number }[];
+  weekday: { label: string; count: number }[]; hours: { label: string; count: number }[];
+  staff_workload: { staff: string; actions: number }[]; open_aging: Record<string, number>;
 }
 
 export interface ApiErrorBody { error: { code: string; message: string; details?: { field: string; message: string }[] } }
+
+export interface ActivityItem { at: string; kind: "lost" | "found" | "claim" | "staff"; title: string; code: string; detail: string; actor: string }
+export interface Hotspot { place: string; lost: number; found: number; total: number; recovered: number; lat: number | null; lng: number | null; map_url: string | null }
+export interface AttentionItem { kind: string; severity: "high" | "medium" | "low"; title: string; code: string; detail: string; age_hours: number; claim_id: number | null }
+export interface Attention { rules: Record<string, number>; counts: Record<string, number>; items: AttentionItem[] }
+export interface Community {
+  top_finders: { name: string; reported: number; returned: number }[]; top_owners: { name: string; reported: number; recovered: number }[];
+  members: number; returned_total: number;
+}
+export interface Profile {
+  user: { id: number; name: string; email: string; role: string; member_since: string };
+  lost: { total: number; active: number; recovered: number };
+  found: { total: number; active: number; returned: number; with_staff: number };
+  matches: { total: number; best_score: number | null; strong: number; dismissed: number };
+  claims: { total: number; by_status: Record<string, number> };
+  recovery_rate: number | null; avg_hours_to_recover: number | null;
+  categories: { category: string; count: number }[]; unread_notifications: number;
+  timeline: { at: string; kind: string; title: string; detail: string }[];
+}

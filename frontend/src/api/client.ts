@@ -1,5 +1,5 @@
 import type {
-  Analytics, ApiErrorBody, CaseDetail, Claim, ClaimDetail, ClaimInput, Evidence, Match, MatchRow, MyReports, Notification, PendingDeposit, PersonRow, RecoveryCase,
+  ActivityItem, Analytics, ApiErrorBody, Attention, Community, Hotspot, Profile, CaseDetail, Claim, ClaimDetail, ClaimInput, Evidence, Match, MatchRow, MyReports, Notification, PendingDeposit, PersonRow, RecoveryCase,
   Report, ReportCreated, ReportRow, StaffAction, StaffSummary, TokenResponse, User,
 } from "./types";
 
@@ -57,6 +57,8 @@ export const api = {
   register: (d: { name: string; email: string; password: string }) => post<TokenResponse>("/auth/register", d),
   login: (d: { email: string; password: string }) => post<TokenResponse>("/auth/login", d),
   me: () => json<User>("/auth/me"),
+  profile: () => json<Profile>("/profile"),
+  rename: (name: string) => patch<User>("/auth/me", { name }),
 
   createLost: (fd: FormData) => json<ReportCreated>("/reports/lost", { method: "POST", body: fd }),
   createFound: (fd: FormData) => json<ReportCreated>("/reports/found", { method: "POST", body: fd }),
@@ -95,7 +97,11 @@ export const api = {
 
   staff: {
     summary: () => json<StaffSummary>("/staff/summary"),
-    analytics: () => json<Analytics>("/staff/analytics"),
+    analytics: (days = 14) => json<Analytics>(`/staff/analytics?days=${days}`),
+    activity: (limit = 40) => json<ActivityItem[]>(`/staff/activity?limit=${limit}`),
+    hotspots: () => json<Hotspot[]>("/staff/hotspots"),
+    attention: () => json<Attention>("/staff/attention"),
+    community: () => json<Community>("/staff/community"),
     deposits: () => json<PendingDeposit[]>("/staff/found/pending-deposits"),
     confirmDeposit: (id: number) => post<{ ok: boolean }>(`/staff/found/${id}/confirm-deposit`),
     cases: (status?: string, q?: string) => json<RecoveryCase[]>(`/staff/recovery-requests${qs({ status, q })}`),

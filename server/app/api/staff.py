@@ -5,10 +5,11 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 from app.api.deps import DB, StaffUser
+from app.core.errors import unprocessable
 from app.schemas import (Analytics, ApproveIn, CaseDetailOut, CollectionIn, MatchRow, MessageIn, NoteIn, OkOut,
                          PendingDepositOut, PersonRow, ReasonIn, RecoveryCaseOut, ReportRow, StaffActionOut,
                          StaffSummary)
-from app.services import staff_service
+from app.services import insight_service, staff_service
 
 router = APIRouter(prefix="/staff", tags=["staff"])
 
@@ -19,8 +20,30 @@ def summary(db: DB, _: StaffUser):
 
 
 @router.get("/analytics", response_model=Analytics)
-def analytics(db: DB, _: StaffUser):
-    return staff_service.analytics(db)
+def analytics(db: DB, _: StaffUser, days: int = 14):
+    if days not in (7, 14, 30, 90):
+        raise unprocessable("days must be 7, 14, 30 or 90.")
+    return staff_service.analytics(db, days)
+
+
+@router.get("/activity")
+def activity(db: DB, _: StaffUser, limit: int = 40):
+    return insight_service.activity(db, limit)
+
+
+@router.get("/hotspots")
+def hotspots(db: DB, _: StaffUser):
+    return insight_service.hotspots(db)
+
+
+@router.get("/attention")
+def attention(db: DB, _: StaffUser):
+    return insight_service.attention(db)
+
+
+@router.get("/community")
+def community(db: DB, _: StaffUser):
+    return insight_service.community(db)
 
 
 @router.get("/found/pending-deposits", response_model=list[PendingDepositOut])
@@ -125,6 +148,6 @@ def log(db: DB, _: StaffUser, q: str | None = None, target: str | None = None):
 
 
 @router.get("/export/{what}.csv", response_class=Response)
-def export(what: Literal["matches", "lost-reports", "found-reports", "claims", "log"], db: DB, _: StaffUser):
+def export(what: Literal["matches", "lost-reports", "found-reports", "claims", "log", "analytics"], db: DB, _: StaffUser):
     return Response(staff_service.export_csv(db, what), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="findback-{what}.csv"'})

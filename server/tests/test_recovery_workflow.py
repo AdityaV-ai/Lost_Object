@@ -386,7 +386,7 @@ def test_users_cannot_touch_each_others_private_data(client, make_user):
     assert client.get(f"{H}/staff/recovery-requests/{rid}", headers=staff["headers"]).status_code == 200
 
 
-STAFF_GETS = ["summary", "analytics", "recovery-requests", "recovery-requests/1", "matches", "people", "reports",
+STAFF_GETS = ["summary", "analytics", "activity", "hotspots", "attention", "community", "recovery-requests", "recovery-requests/1", "matches", "people", "reports",
               "log", "found/pending-deposits", "export/claims.csv"]
 STAFF_POSTS = ["review", "request-evidence", "approve", "verify", "reject", "notes", "collection", "handover", "complete"]
 
@@ -484,6 +484,86 @@ def test_staff_dashboard_counts_follow_the_workflow(client, make_user):
     assert summ()["rejected_claims"] == s0["rejected_claims"] + 1
 
 
+def test_analytics_insights_move_with_real_actions_and_are_staff_only(client, make_user):
+    staff = staff_user(make_user)
+
+    def an(q=""):
+        r = client.get(f"{H}/staff/analytics{q}", headers=staff["headers"])
+        assert r.status_code == 200
+        return r.json()
+    a0 = an()
+    f0 = {f["stage"]: f["count"] for f in a0["funnel"]}
+    a, b, m = pair(client, make_user, "Ana")
+    c = claim(client, a, m)
+    a1 = an()
+    f1 = {f["stage"]: f["count"] for f in a1["funnel"]}
+    assert f1["Submitted"] == f0["Submitted"] + 1 and f1["Reviewed by staff"] == f0["Reviewed by staff"]
+    assert a1["review_times"]["waiting_for_review"] == a0["review_times"]["waiting_for_review"] + 1
+    sp(client, staff, c["id"], "review")
+    sp(client, staff, c["id"], "approve")
+    sp(client, staff, c["id"], "collection", name="Desk")
+    sp(client, staff, c["id"], "handover")
+    a2 = an()
+    f2 = {f["stage"]: f["count"] for f in a2["funnel"]}
+    assert f2["Reviewed by staff"] == f0["Reviewed by staff"] + 1
+    assert f2["Approved"] == f0["Approved"] + 1 and f2["Handed over"] == f0["Handed over"] + 1
+    assert a2["decision_rate"]["approved"] == a0["decision_rate"]["approved"] + 1
+    assert a2["review_times"]["avg_hours_to_first_response"] is not None
+    assert sum(w["actions"] for w in a2["staff_workload"]) > sum(w["actions"] for w in a0["staff_workload"])
+    assert a2["totals"]["claims"] == f2["Submitted"] and sum(a2["open_aging"].values()) <= a2["totals"]["lost"] + a2["totals"]["found"]
+    assert len(an("?days=30")["reports_per_day"]) == 30 and len(an("?days=7")["reports_per_day"]) == 7
+    assert client.get(f"{H}/staff/analytics?days=5", headers=staff["headers"]).status_code == 422
+    assert "approval_rate" in client.get(f"{H}/staff/export/analytics.csv", headers=staff["headers"]).text
+    assert client.get(f"{H}/staff/analytics", headers=a["headers"]).status_code == 403
+
+
+def test_staff_feed_hotspots_attention_and_community_use_live_data(client, make_user):
+    staff = staff_user(make_user)
+    g = lambda p: client.get(f"{H}/staff/{p}", headers=staff["headers"])  # noqa: E731
+    a, b, m = pair(client, make_user, "Fed")
+    c = claim(client, a, m)
+    feed = g("activity").json()
+    assert any(i["kind"] == "claim" and i["title"] == "Claim submitted" for i in feed)
+    assert any(i["kind"] == "lost" for i in feed) and any(i["kind"] == "found" for i in feed)
+    assert [i["at"] for i in feed] == sorted((i["at"] for i in feed), reverse=True)
+    sp(client, staff, c["id"], "review")
+    client.post(f"{H}/staff/recovery-requests/{c['id']}/notes", headers=staff["headers"], json={"note": "secret staff note"})
+    assert "secret staff note" not in g("activity?limit=200").text           # internal notes stay out of the feed
+    assert len(g("activity?limit=2").json()) == 2
+    att = g("attention").json()
+    assert set(att["rules"]) == {"claim_waiting_h", "evidence_waiting_h", "collection_waiting_h", "unclaimed_found_h"}
+    assert all(i["severity"] in ("high", "medium", "low") for i in att["items"])
+    assert sum(att["counts"].values()) == len(att["items"])
+    assert not any(i["claim_id"] == c["id"] and i["kind"] == "claim_waiting" for i in att["items"])  # just reviewed, fresh
+    for h in g("hotspots").json():
+        assert h["total"] == h["lost"] + h["found"] and h["recovered"] <= h["total"]
+    com = g("community").json()
+    assert com["members"] >= 3 and com["returned_total"] >= sum(f["returned"] for f in com["top_finders"])
+
+
+def test_profile_shows_only_the_signed_in_users_own_numbers_and_can_be_renamed(client, make_user):
+    staff = staff_user(make_user)
+    a, b, m = pair(client, make_user, "Prf")
+    p0 = client.get(f"{H}/profile", headers=a["headers"]).json()
+    pf = client.get(f"{H}/profile", headers=b["headers"]).json()
+    assert p0["user"]["email"] == a["email"] and "password" not in str(p0).lower()
+    assert p0["lost"]["total"] == 1 and p0["found"]["total"] == 0 and p0["matches"]["total"] >= 1
+    assert pf["found"]["total"] == 1 and pf["lost"]["total"] == 0 and pf["matches"]["total"] == 0   # finder sees no one's matches
+    c = claim(client, a, m)
+    sp(client, staff, c["id"], "approve")
+    sp(client, staff, c["id"], "collection", name="Desk")
+    sp(client, staff, c["id"], "handover")
+    p1 = client.get(f"{H}/profile", headers=a["headers"]).json()
+    assert p1["lost"]["recovered"] == 1 and p1["recovery_rate"] == 1.0 and p1["claims"]["total"] == 1
+    assert p1["avg_hours_to_recover"] is not None and p1["timeline"][0]["at"] >= p1["timeline"][-1]["at"]
+    assert client.get(f"{H}/profile", headers=b["headers"]).json()["found"]["returned"] == 1
+    r = client.patch(f"{H}/auth/me", headers=a["headers"], json={"name": "  New Name "})
+    assert r.status_code == 200 and r.json()["name"] == "New Name"
+    assert client.get(f"{H}/profile", headers=a["headers"]).json()["user"]["name"] == "New Name"
+    assert client.patch(f"{H}/auth/me", headers=a["headers"], json={"name": "   "}).status_code == 422
+    assert client.get(f"{H}/profile").status_code == 401
+
+
 def test_case_detail_gives_staff_the_full_investigation_view(client, make_user):
     a, b, m = pair(client, make_user, "Det")
     staff = staff_user(make_user)
@@ -546,3 +626,20 @@ def test_workflow_columns_and_tables_are_added_to_an_existing_database_without_d
     assert con.execute("SELECT id, status, proof FROM recovery_requests").fetchall() == [(7, "VERIFIED", "my proof")]
     assert {"claim_evidence", "claim_events"} <= {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     con.close()
+
+
+def test_demo_accounts_are_created_once_and_can_log_in(client):
+    from app.db.session import SessionLocal
+    from app.services.demo_accounts import DEMO_ACCOUNTS, DEMO_PASSWORD, seed_demo_accounts
+    with SessionLocal() as db:
+        first = seed_demo_accounts(db)
+        assert seed_demo_accounts(db) == 0            # idempotent: never duplicates or resets
+    assert first in (0, 3)
+    roles = {}
+    for _name, email, role in DEMO_ACCOUNTS:
+        r = client.post(f"{H}/auth/login", json={"email": email, "password": DEMO_PASSWORD})
+        assert r.status_code == 200, email
+        roles[email] = r.json()["user"]["role"]
+        assert role == roles[email]
+    t = client.post(f"{H}/auth/login", json={"email": "staff@demo.test", "password": DEMO_PASSWORD}).json()["access_token"]
+    assert client.get(f"{H}/staff/summary", headers={"Authorization": f"Bearer {t}"}).status_code == 200

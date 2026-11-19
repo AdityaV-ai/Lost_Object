@@ -9,6 +9,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{Path(_tmp, 'test.db').as_posix()}"
 os.environ["UPLOAD_DIR"] = str(Path(_tmp, "uploads"))
 os.environ["SECRET_KEY"] = "test-secret-not-for-production"
 os.environ["IMAGE_MATCHING_ENABLED"] = "false"
+os.environ["DEMO_ACCOUNTS"] = "0"   # tests create their own users; test_demo_accounts calls the seeder directly
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest  # noqa: E402

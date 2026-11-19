@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import conflict, not_found, unprocessable
 from app.integrations import ai_modules
-from app.models import (FoundReport, LostReport, MatchResult, Notification, RecoveryRequest, StaffAction, User)
+from app.models import (ClaimEvent, ClaimEvidence, FoundReport, LostReport, MatchResult, Notification, RecoveryRequest, StaffAction, User)
 from app.schemas import (Analytics, CaseDetailOut, ClaimantOut, CollectionIn, MatchRow, MatchScoresOut, Party,
                          PendingDepositOut, PersonRow, RecoveryCaseOut, ReportRow, SignalOut, StaffActionOut,
                          StaffSummary)
@@ -366,7 +366,79 @@ def action_log(db: Session, q: str | None = None, target: str | None = None) -> 
 
 
 # ---------------- analytics ----------------
-def analytics(db: Session) -> Analytics:
+def _insights(db: Session, claims: list, lost: list, found: list) -> dict:
+    """Extra analytics. Everything is derived from live rows; nothing is cached or invented."""
+    now = _now()
+    n = len(claims)
+    ids = {c.id for c in claims}
+    events = db.scalars(select(ClaimEvent)).all()
+    first_staff: dict[int, datetime] = {}
+    for e in sorted(events, key=lambda e: e.created_at):
+        if e.actor_role == "staff" and e.request_id in ids and not e.internal:
+            first_staff.setdefault(e.request_id, e.created_at)
+    reached = lambda *st: sum(1 for c in claims if c.status in st)  # noqa: E731
+    stages = [("Submitted", n),
+              ("Reviewed by staff", len(set(first_staff) | {c.id for c in claims if c.status not in ("PENDING", "CANCELLED")})),
+              ("Approved", reached("VERIFIED", "AWAITING_COLLECTION", "HANDED_OVER", "COMPLETED")),
+              ("Handed over", reached("HANDED_OVER", "COMPLETED")),
+              ("Completed", reached("COMPLETED"))]
+    funnel = [{"stage": s, "count": k, "share": round(k / n, 4) if n else None} for s, k in stages]
+
+    approved, rejected = stages[2][1], reached("REJECTED")
+    decided = approved + rejected
+    decision = {"approved": approved, "rejected": rejected, "cancelled": reached("CANCELLED"),
+                "approval_rate": round(approved / decided, 4) if decided else None}
+
+    waits = [(first_staff[c.id] - c.created_at).total_seconds() / 3600 for c in claims if c.id in first_staff]
+    waiting = [c for c in claims if c.status == "PENDING"]
+    oldest = max(((now - c.created_at).total_seconds() / 3600 for c in waiting), default=None)
+    review = {"avg_hours_to_first_response": round(sum(waits) / len(waits), 2) if waits else None,
+              "waiting_for_review": len(waiting), "oldest_waiting_hours": round(oldest, 1) if oldest is not None else None}
+
+    scores = [s for (s,) in db.execute(select(MatchResult.fusion_score).where(MatchResult.fusion_score.is_not(None))).all()]
+    claimed_matches = {c.match_id for c in claims}
+    strong = [s for s in scores if s >= .75]
+    strong_ids = db.scalars(select(MatchResult.id).where(MatchResult.fusion_score >= .75)).all()
+    quality = {"avg_score": round(sum(scores) / len(scores), 3) if scores else None,
+               "high_confidence": len(strong), "high_confidence_share": round(len(strong) / len(scores), 4) if scores else None,
+               "dismissed": _count(db, MatchResult, MatchResult.dismissed.is_(True)),
+               "claim_conversion": round(sum(1 for i in strong_ids if i in claimed_matches) / len(strong_ids), 4) if strong_ids else None}
+
+    with_ev = {r for (r,) in db.execute(select(ClaimEvidence.request_id)).all() if r in ids}
+    asked = {e.request_id for e in events if e.to_status == "ADDITIONAL_EVIDENCE_REQUESTED" and e.request_id in ids}
+    evidence = {"claims_with_evidence": len(with_ev), "share_with_evidence": round(len(with_ev) / n, 4) if n else None,
+                "evidence_requested": len(asked)}
+
+    status = {"lost": dict(Counter(r.status for r in lost)), "found": dict(Counter(r.status for r in found))}
+    custody = dict(Counter(r.custody_status for r in found))
+
+    places: Counter = Counter()
+    for r in (*lost, *found):
+        if r.location and r.location.address:
+            places[r.location.address.split(",")[0].strip()[:40]] += 1
+    top_places = [{"place": p, "count": k} for p, k in places.most_common(6)]
+
+    dated = [r.occurred_at or r.created_at for r in (*lost, *found)]
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    wd = Counter(d.weekday() for d in dated)
+    hr = Counter(d.hour for d in dated)
+    weekday = [{"label": names[i], "count": wd.get(i, 0)} for i in range(7)]
+    hours = [{"label": f"{h:02d}", "count": hr.get(h, 0)} for h in range(24)]
+
+    work = db.execute(select(User.name, func.count(StaffAction.id)).join(StaffAction, StaffAction.staff_id == User.id)
+                      .group_by(User.id, User.name).order_by(func.count(StaffAction.id).desc())).all()
+    aging = Counter()
+    for r in (*lost, *found):
+        if r.status == "ACTIVE":
+            d = (now - r.created_at).days
+            aging["0-1 days" if d < 2 else "2-7 days" if d < 8 else "8-30 days" if d < 31 else "30+ days"] += 1
+    return {"funnel": funnel, "decision_rate": decision, "review_times": review, "match_quality": quality,
+            "evidence_stats": evidence, "report_status": status, "custody": custody, "top_locations": top_places,
+            "weekday": weekday, "hours": hours, "staff_workload": [{"staff": a, "actions": b} for a, b in work],
+            "open_aging": {k: aging.get(k, 0) for k in ("0-1 days", "2-7 days", "8-30 days", "30+ days")}}
+
+
+def analytics(db: Session, days: int = 14) -> Analytics:
     lost_n, found_n = _count(db, LostReport), _count(db, FoundReport)
     claims = db.scalars(select(RecoveryRequest)).all()
     by_status = Counter(c.status for c in claims)
@@ -381,7 +453,8 @@ def analytics(db: Session) -> Analytics:
     for (score,) in db.execute(select(MatchResult.fusion_score)).all():
         bands["<0.50" if (score or 0) < .5 else "0.50-0.75" if score < .75 else ">=0.75"] += 1
     today = _now().date()
-    days = [(today - timedelta(days=i)) for i in range(13, -1, -1)]
+    range_days = days
+    days = [(today - timedelta(days=i)) for i in range(range_days - 1, -1, -1)]
     per_day = {d: {"date": d.isoformat(), "lost": 0, "found": 0} for d in days}
     for kind, model in (("lost", LostReport), ("found", FoundReport)):
         for (created,) in db.execute(select(model.created_at)).all():
@@ -394,10 +467,21 @@ def analytics(db: Session) -> Analytics:
         avg_hours_to_complete=round(sum(hours) / len(hours), 2) if hours else None,
         claims_by_status=dict(by_status), reports_by_category=top,
         matches_by_score_band={k: bands.get(k, 0) for k in ("<0.50", "0.50-0.75", ">=0.75")},
-        reports_per_day=list(per_day.values()))
+        reports_per_day=list(per_day.values()), generated_at=_now(), range_days=range_days,
+        **_insights(db, claims, db.scalars(select(LostReport)).all(), db.scalars(select(FoundReport)).all()))
 
 
 # ---------------- CSV export ----------------
+def _flat_metrics(a: Analytics) -> list[dict]:
+    rows = [{"metric": f"totals.{k}", "value": v} for k, v in a.totals.items()]
+    rows += [{"metric": "recovery_rate", "value": a.recovery_rate}, {"metric": "avg_hours_to_complete", "value": a.avg_hours_to_complete}]
+    rows += [{"metric": f"funnel.{f['stage']}", "value": f["count"]} for f in a.funnel]
+    for name in ("decision_rate", "review_times", "match_quality", "evidence_stats"):
+        rows += [{"metric": f"{name}.{k}", "value": v} for k, v in getattr(a, name).items()]
+    rows += [{"metric": f"claims.{k}", "value": v} for k, v in a.claims_by_status.items()]
+    rows += [{"metric": f"location.{p['place']}", "value": p["count"]} for p in a.top_locations]
+    rows += [{"metric": f"staff.{w['staff']}", "value": w["actions"]} for w in a.staff_workload]
+    return rows
 def export_csv(db: Session, what: str) -> str:
     sources = {
         "matches": lambda: [r.model_dump() for r in match_rows(db)],
@@ -408,6 +492,7 @@ def export_csv(db: Session, what: str) -> str:
                             "created_at": c.created_at, "verified_at": c.verified_at, "completed_at": c.completed_at}
                            for c in list_cases(db)],
         "log": lambda: [a.model_dump() for a in action_log(db)],
+        "analytics": lambda: _flat_metrics(analytics(db, 30)),
     }
     if what not in sources:
         raise not_found("Unknown export.")

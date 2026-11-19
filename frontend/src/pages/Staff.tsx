@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Analytics, CaseDetail, PendingDeposit, Report } from "../api/types";
@@ -7,10 +7,12 @@ import { Modal } from "../components/Modal";
 import { SecureImage } from "../components/SecureImage";
 import { Async, Empty, useAsync } from "../components/States";
 import { SignalBars } from "../components/Widgets";
+import { ActivityTab, AttentionTab, CommunityTab, HotspotsTab } from "./StaffInsights";
 import { CUSTODY_TEXT, download, errorText, fmtDateTime, pct, statusChip } from "../utils";
 
 const TABS = [["analytics", "Analytics"], ["claims", "Recovery requests"], ["deposits", "Deposits"], ["reports", "Reports"],
-  ["people", "People"], ["matching", "Matching activity"], ["log", "Staff log"]] as const;
+  ["people", "People"], ["matching", "Matching activity"], ["activity", "Activity feed"], ["attention", "Needs attention"],
+  ["hotspots", "Hotspots"], ["community", "Community"], ["log", "Staff log"]] as const;
 type TabKey = (typeof TABS)[number][0];
 
 const Chip = ({ status }: { status: string }) => { const c = statusChip(status); return <span className={`chip ${c.cls}`}><span className="dot" />{c.text}</span>; };
@@ -42,36 +44,66 @@ function Columns({ data, keys }: { data: { label: string; a: number; b?: number 
   );
 }
 
-function AnalyticsView({ a }: { a: Analytics }) {
+function Panel({ title, children, wide }: { title: string; children: ReactNode; wide?: boolean }) {
+  return <div className="card chart" style={wide ? { gridColumn: "1 / -1" } : undefined}><h3>{title}</h3>{children}</div>;
+}
+function HBars({ rows, unit = "" }: { rows: { label: string; n: number }[]; unit?: string }) {
+  const max = Math.max(1, ...rows.map(r => r.n));
+  if (rows.every(r => r.n === 0)) return <p className="muted">Nothing to show yet.</p>;
+  return <div className="bars">{rows.map(r => (
+    <div className="sig" key={r.label} style={{ gridTemplateColumns: "120px 1fr 44px" }}><span>{r.label}</span>
+      <div className="bar"><i style={{ width: `${(r.n / max) * 100}%` }} /></div><span>{r.n}{unit}</span></div>))}</div>;
+}
+const hrs = (h: number | null | undefined) => h === null || h === undefined ? "—" : h >= 48 ? `${(h / 24).toFixed(1)} d` : `${h} h`;
+
+function AnalyticsView({ a, days, setDays, reload }: { a: Analytics; days: number; setDays: (d: number) => void; reload: () => void }) {
+  const mq = a.match_quality, rt = a.review_times, dr = a.decision_rate, ev = a.evidence_stats;
+  const shown = a.reports_per_day.reduce((n, d) => n + d.lost + d.found, 0);
   return (
     <>
+      <div className="row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+        <p className="muted tiny" style={{ margin: 0 }}><span style={{ color: "var(--success)" }}>●</span> Live from the database · updated {a.generated_at ? fmtDateTime(a.generated_at) : "—"} · refreshes every 30 s</p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <Seg value={String(days)} options={[["7", "7 days"], ["14", "14 days"], ["30", "30 days"], ["90", "90 days"]]} onChange={v => setDays(Number(v))} />
+          <button className="btn btn-sm" onClick={reload}>Refresh</button><ExportBtn what="analytics" />
+        </div>
+      </div>
       <div className="stats">
         <div className="stat"><div className="k">Recovery rate</div><div className="v">{a.recovery_rate === null ? "—" : `${Math.round(a.recovery_rate * 100)}%`}</div><div className="s">{a.totals.recovered} of {a.totals.lost} lost reports returned</div></div>
-        <div className="stat green"><div className="k">Avg time to return</div><div className="v">{a.avg_hours_to_complete === null ? "—" : `${a.avg_hours_to_complete} h`}</div><div className="s">claim to completed handover</div></div>
-        <div className="stat"><div className="k">Matches generated</div><div className="v">{a.totals.matches}</div><div className="s">{a.totals.claims} claims</div></div>
-        <div className="stat green"><div className="k">Users</div><div className="v">{a.totals.users}</div><div className="s">{a.totals.lost} lost · {a.totals.found} found reports</div></div>
+        <div className="stat green"><div className="k">Avg time to return</div><div className="v">{hrs(a.avg_hours_to_complete)}</div><div className="s">claim to handover</div></div>
+        <div className="stat"><div className="k">Approval rate</div><div className="v">{dr.approval_rate == null ? "—" : `${pct(dr.approval_rate)}%`}</div><div className="s">{dr.approved ?? 0} approved · {dr.rejected ?? 0} rejected</div></div>
+        <div className="stat green"><div className="k">First response</div><div className="v">{hrs(rt.avg_hours_to_first_response)}</div><div className="s">{rt.waiting_for_review ?? 0} waiting{rt.oldest_waiting_hours != null ? ` · oldest ${hrs(rt.oldest_waiting_hours)}` : ""}</div></div>
+        <div className="stat"><div className="k">Match quality</div><div className="v">{mq.avg_score == null ? "—" : mq.avg_score.toFixed(2)}</div><div className="s">{mq.high_confidence ?? 0} strong (≥0.75) of {a.totals.matches}</div></div>
+        <div className="stat green"><div className="k">Strong matches claimed</div><div className="v">{mq.claim_conversion == null ? "—" : `${pct(mq.claim_conversion)}%`}</div><div className="s">{mq.dismissed ?? 0} dismissed by owners</div></div>
+        <div className="stat"><div className="k">Claims with evidence</div><div className="v">{ev.share_with_evidence == null ? "—" : `${pct(ev.share_with_evidence)}%`}</div><div className="s">{ev.claims_with_evidence ?? 0} claims · {ev.evidence_requested ?? 0} asked for more</div></div>
+        <div className="stat green"><div className="k">Reports in range</div><div className="v">{shown}</div><div className="s">last {a.range_days} days</div></div>
       </div>
       <div className="charts">
-        <div className="card chart"><h3>Reports, last 14 days</h3>
-          <Columns keys={["Lost", "Found"]} data={a.reports_per_day.map(d => ({ label: d.date.slice(8), a: d.lost, b: d.found }))} /></div>
-        <div className="card chart"><h3>Match relevance bands</h3>
-          <Columns data={Object.entries(a.matches_by_score_band).map(([label, n]) => ({ label, a: n }))} /></div>
-        <div className="card chart"><h3>Claims by status</h3>
-          {Object.keys(a.claims_by_status).length === 0 ? <p className="muted">No claims yet.</p> :
-            <div className="bars">{Object.entries(a.claims_by_status).map(([s, n]) => (
-              <div className="sig" key={s} style={{ gridTemplateColumns: "110px 1fr 30px" }}><span>{statusChip(s).text}</span>
-                <div className="bar"><i style={{ width: `${(n / Math.max(...Object.values(a.claims_by_status))) * 100}%` }} /></div><span>{n}</span></div>))}</div>}</div>
-        <div className="card chart"><h3>Top categories</h3>
-          {a.reports_by_category.length === 0 ? <p className="muted">No reports yet.</p> :
-            <div className="bars">{a.reports_by_category.map(c => (
-              <div className="sig" key={c.category} style={{ gridTemplateColumns: "130px 1fr 60px" }}><span>{c.category}</span>
-                <div className="bar"><i style={{ width: `${((c.lost + c.found) / (a.reports_by_category[0].lost + a.reports_by_category[0].found)) * 100}%` }} /></div>
-                <span>{c.lost}L / {c.found}F</span></div>))}</div>}</div>
+        <Panel title={`Reports, last ${a.range_days} days`} wide={a.range_days > 14}>
+          <Columns keys={["Lost", "Found"]} data={a.reports_per_day.map(d => ({ label: a.range_days > 30 ? (d.date.slice(8) === "01" || d.date.slice(8) === "15" ? d.date.slice(5) : "") : d.date.slice(8), a: d.lost, b: d.found }))} /></Panel>
+        <Panel title="Claim pipeline (how far claims get)">
+          {a.funnel[0]?.count ? <HBars rows={a.funnel.map(f => ({ label: f.stage, n: f.count }))} /> : <p className="muted">No claims yet.</p>}
+          {a.funnel[0]?.count ? <p className="muted tiny" style={{ marginTop: 8 }}>{a.funnel.map(f => `${f.stage} ${pct(f.share)}%`).join(" · ")}</p> : null}</Panel>
+        <Panel title="Match relevance bands"><Columns data={Object.entries(a.matches_by_score_band).map(([label, n]) => ({ label, a: n }))} /></Panel>
+        <Panel title="Claims by status">
+          <HBars rows={Object.entries(a.claims_by_status).map(([s, n]) => ({ label: statusChip(s).text, n }))} /></Panel>
+        <Panel title="Top categories">
+          <HBars rows={a.reports_by_category.map(c => ({ label: c.category, n: c.lost + c.found }))} />
+          {a.reports_by_category.length > 0 && <p className="muted tiny" style={{ marginTop: 8 }}>{a.reports_by_category.map(c => `${c.category} ${c.lost}L/${c.found}F`).join(" · ")}</p>}</Panel>
+        <Panel title="Busiest places"><HBars rows={a.top_locations.map(l => ({ label: l.place, n: l.count }))} /></Panel>
+        <Panel title="Reports by day of week"><Columns data={a.weekday.map(d => ({ label: d.label, a: d.count }))} /></Panel>
+        <Panel title="Reports by hour of day (all time)"><Columns data={a.hours.map(h => ({ label: Number(h.label) % 3 === 0 ? h.label : "", a: h.count }))} /></Panel>
+        <Panel title="Found items by custody"><HBars rows={Object.entries(a.custody).map(([k, n]) => ({ label: CUSTODY_TEXT[k] ?? k, n }))} /></Panel>
+        <Panel title="Open reports by age"><HBars rows={Object.entries(a.open_aging).map(([label, n]) => ({ label, n }))} /></Panel>
+        <Panel title="Report outcomes">
+          <HBars rows={[...Object.entries(a.report_status.lost).map(([k, n]) => ({ label: `Lost · ${k.toLowerCase()}`, n })),
+            ...Object.entries(a.report_status.found).map(([k, n]) => ({ label: `Found · ${k.toLowerCase()}`, n }))]} /></Panel>
+        <Panel title="Staff workload (logged actions)">
+          <HBars rows={a.staff_workload.map(w => ({ label: w.staff, n: w.actions }))} /></Panel>
       </div>
     </>
   );
 }
-
 /* ---------------- claims ---------------- */
 function ReportFacts({ r, kind, place }: { r: Report; kind: "lost" | "found"; place?: string | null }) {
   return (
@@ -374,7 +406,9 @@ export default function Staff() {
   const [params, setParams] = useSearchParams();
   const tab = (TABS.find(([k]) => k === params.get("tab"))?.[0] ?? "claims") as TabKey;
   const summary = useAsync(api.staff.summary, []);
-  const analytics = useAsync(api.staff.analytics, []);
+  const [days, setDays] = useState(14);
+  const analytics = useAsync(() => api.staff.analytics(days), [days]);
+  useEffect(() => { if (tab !== "analytics") return; const id = setInterval(analytics.reload, 30000); return () => clearInterval(id); }, [tab, analytics.reload]);
   const s = summary.data;
   const badge = (k: TabKey): ReactNode => (k === "claims" && s?.claims_to_verify ? <span className="badge">{s.claims_to_verify}</span>
     : k === "deposits" && s?.deposits_to_confirm ? <span className="badge">{s.deposits_to_confirm}</span> : null);
@@ -392,12 +426,16 @@ export default function Staff() {
         <div className="stat"><div className="k">Deposits to confirm</div><div className="v">{s?.deposits_to_confirm ?? "—"}</div><div className="s">{s?.finders_holding_items ?? 0} items with finders</div></div>
       </div>      <div className="tabs" role="tablist">{TABS.map(([k, l]) => (
         <button key={k} role="tab" aria-selected={tab === k} className={`tab${tab === k ? " active" : ""}`} onClick={() => setParams({ tab: k })}>{l}{badge(k)}</button>))}</div>
-      {tab === "analytics" && <Async q={analytics}>{a => <AnalyticsView a={a} />}</Async>}
+      {tab === "analytics" && <Async q={analytics}>{a => <AnalyticsView a={a} days={days} setDays={setDays} reload={analytics.reload} />}</Async>}
       {tab === "claims" && <Claims reloadSummary={() => { summary.reload(); analytics.reload(); }} />}
       {tab === "deposits" && <Deposits reloadSummary={summary.reload} />}
       {tab === "reports" && <Reports />}
       {tab === "people" && <People />}
       {tab === "matching" && <Matching />}
+      {tab === "activity" && <ActivityTab />}
+      {tab === "attention" && <AttentionTab />}
+      {tab === "hotspots" && <HotspotsTab />}
+      {tab === "community" && <CommunityTab />}
       {tab === "log" && <Log />}
     </>
   );

@@ -6,6 +6,7 @@ import Overview from "./pages/Overview";
 import { ReportFound, ReportLost } from "./pages/ReportForms";
 import Matches from "./pages/Matches";
 import Staff from "./pages/Staff";
+import Profile from "./pages/Profile";
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="report-lost" element={<ReportLost />} />
           <Route path="report-found" element={<ReportFound />} />
           <Route path="matches" element={<Matches />} />
+          <Route path="profile" element={<Profile />} />
           <Route element={<RequireAuth staff />}>
             <Route path="staff" element={<Staff />} />
           </Route>

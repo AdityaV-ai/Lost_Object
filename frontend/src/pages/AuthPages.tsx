@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { DevQuickLogin } from "../components/DevQuickLogin";
@@ -34,6 +34,11 @@ export function Login() {
   const from = (useLocation().state as { from?: string } | null)?.from ?? "/dashboard";
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const formRef = useRef<HTMLFormElement>(null);
+  const fill = (email: string, password: string) => {
+    const els = formRef.current?.elements as unknown as Record<string, HTMLInputElement> | undefined;
+    if (els) { els.email.value = email; els.password.value = password; }
+  };
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -45,14 +50,14 @@ export function Login() {
   }
   return (
     <Shell title="Log in to FindBack" sub="Manage your reports and review your private matches.">
-      <form onSubmit={submit}>
+      <form onSubmit={submit} ref={formRef}>
         <label>Email<input type="email" name="email" autoComplete="email" required placeholder="you@university.edu" /></label>
         <Password name="password" label="Password" placeholder="Your password" auto="current-password" />
         {msg && <div className="msg error" role="alert">{msg}</div>}
         <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Signing in…" : "Log in"}</button>
       </form>
       <p className="muted" style={{ textAlign: "center", marginTop: 16 }}>New here? <Link to="/register">Create an account</Link></p>
-      <DevQuickLogin />
+      <DevQuickLogin onFill={fill} />
     </Shell>
   );
 }

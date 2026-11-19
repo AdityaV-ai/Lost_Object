@@ -12,7 +12,7 @@ from app.core.security import create_access_token
 from app.schemas import (ClaimDetailOut, ClaimIn, EvidenceOut, FoundReportIn, FoundReportPatch, LoginIn, LostReportIn,
                          LostReportPatch, MatchOut, MyReportsOut, NotificationOut, OkOut, RecoveryRequestOut,
                          RegisterIn, ReportCreated, ReportOut, TokenOut, UserOut)
-from app.services import auth_service, claim_service, portal_service, report_service
+from app.services import auth_service, claim_service, insight_service, portal_service, report_service
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(staff.router)
@@ -45,6 +45,16 @@ def login(body: LoginIn, db: DB):
 @router.get("/auth/me", response_model=UserOut, tags=["auth"])
 def me(user: CurrentUser):
     return user
+
+
+@router.get("/profile", tags=["auth"])
+def my_profile(user: CurrentUser, db: DB):
+    return insight_service.profile(db, user)
+
+
+@router.patch("/auth/me", response_model=UserOut, tags=["auth"])
+def rename_me(body: dict, user: CurrentUser, db: DB):
+    return insight_service.rename(db, user, str(body.get("name", "")))
 
 
 # ---------------- reports ----------------

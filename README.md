@@ -41,10 +41,15 @@ cd server
 .\.venv\Scripts\python.exe scripts\create_staff.py someone@example.com   # account must exist already
 ```
 
+**Test logins (development only).** On startup the API creates three demo accounts if they are missing, and the login page has
+Owner / Finder / Staff buttons that fill the form and sign in. All use the password `Demo12345!`:
+`owner@demo.test`, `finder@demo.test`, `staff@demo.test` (staff role). Restart the API once if the buttons say the login failed.
+Turn this off for a real deployment: set `DEMO_ACCOUNTS=0` for the API and build the frontend with `VITE_DEMO_LOGIN=0`.
+
 **Tests**
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m pytest -q      # expect: 59 passed (2 use the real model; they skip if it is unavailable)
+.\.venv\Scripts\python.exe -m pytest -q      # expect: 61 passed (2 use the real model; they skip if it is unavailable)
 cd ..\frontend
 npm run build      # includes strict TypeScript check
 ```

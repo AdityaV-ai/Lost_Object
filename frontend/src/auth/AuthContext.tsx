@@ -8,6 +8,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
+  setUser: (u: User) => void;
 }
 const Ctx = createContext<AuthState | null>(null);
 
@@ -25,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const accept = (r: TokenResponse) => { tokenStore.set(r.access_token); setUser(r.user); };
   const value = useMemo<AuthState>(() => ({
-    user, loading, logout,
+    user, loading, logout, setUser,
     login: async (email, password) => accept(await api.login({ email, password })),
     register: async (name, email, password) => accept(await api.register({ name, email, password })),
   }), [user, loading, logout]);

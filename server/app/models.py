@@ -119,6 +119,7 @@ class RecoveryRequest(Base):
     collection_set_at: Mapped[datetime | None] = mapped_column(DateTime)
     handed_over_at: Mapped[datetime | None] = mapped_column(DateTime)
     handed_over_by_id: Mapped[int | None] = mapped_column(Integer)
+    match: Mapped[MatchResult] = relationship()
 
 
 class ClaimEvidence(Base):
