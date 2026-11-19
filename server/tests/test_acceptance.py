@@ -217,15 +217,19 @@ def test_staff_recovery_workflow(client, make_user):
     assert client.post(f"{H}/staff/recovery-requests/{req['id']}/complete", headers=h).status_code == 409  # not verified yet
     assert client.post(f"{H}/staff/recovery-requests/{req['id']}/verify", headers=h).json()["status"] == "VERIFIED"
     assert client.post(f"{H}/staff/recovery-requests/{req['id']}/verify", headers=h).status_code == 409
-    assert client.post(f"{H}/staff/recovery-requests/{req['id']}/bogus", headers=h).status_code == 422
+    assert client.post(f"{H}/staff/recovery-requests/{req['id']}/bogus", headers=h).status_code in (404, 405)
     assert client.post(f"{H}/staff/recovery-requests/999999/verify", headers=h).status_code == 404
     assert any("verified" in n["title"].lower() for n in notes(client, a))
     fnotes = notes(client, b)
     assert fnotes and a["email"] not in str(fnotes) and "Owns" not in str(fnotes)  # finder gets no owner details
 
-    done = client.post(f"{H}/staff/recovery-requests/{req['id']}/complete", headers=h).json()
-    assert done["status"] == "COMPLETED" and done["lost_report"]["status"] == "RECOVERED"
+    assert client.post(f"{H}/staff/recovery-requests/{req['id']}/handover", headers=h).status_code == 409  # no collection place yet
+    assert client.post(f"{H}/staff/recovery-requests/{req['id']}/collection", headers=h,
+                       json={"name": "Security desk"}).json()["status"] == "AWAITING_COLLECTION"
+    done = client.post(f"{H}/staff/recovery-requests/{req['id']}/handover", headers=h).json()
+    assert done["status"] == "HANDED_OVER" and done["lost_report"]["status"] == "RECOVERED"
     assert done["found_report"]["status"] == "RECOVERED"
+    assert client.post(f"{H}/staff/recovery-requests/{req['id']}/complete", headers=h).json()["status"] == "COMPLETED"
     assert client.get(f"{H}/recovery-requests", headers=a["headers"]).json()[0]["status"] == "COMPLETED"
 
     # recovered reports leave the matching pool and cannot be claimed again
@@ -241,7 +245,8 @@ def test_staff_reject(client, make_user):
     post_lost(client, a, category="Timepieces", item_name="Watch", description="silver wrist watch leather strap")
     mid = matches(client, a)[0]["id"]
     rid = client.post(f"{H}/matches/{mid}/interest", headers=a["headers"]).json()["id"]
-    assert client.post(f"{H}/staff/recovery-requests/{rid}/reject", headers=staff["headers"]).json()["status"] == "REJECTED"
+    assert client.post(f"{H}/staff/recovery-requests/{rid}/reject", headers=staff["headers"],
+                       json={"reason": "Does not match the owner's description"}).json()["status"] == "REJECTED"
     assert client.post(f"{H}/staff/recovery-requests/{rid}/verify", headers=staff["headers"]).status_code == 409
     assert any("declined" in n["title"].lower() for n in notes(client, a))
 

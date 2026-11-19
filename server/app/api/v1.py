@@ -9,10 +9,10 @@ from app.api import staff
 from app.api.deps import DB, CurrentUser
 from app.core.errors import unprocessable
 from app.core.security import create_access_token
-from app.schemas import (ClaimIn, FoundReportIn, FoundReportPatch, LoginIn, LostReportIn, LostReportPatch, MatchOut,
-                         MyReportsOut, NotificationOut, OkOut, RecoveryRequestOut, RegisterIn, ReportCreated,
-                         ReportOut, TokenOut, UserOut)
-from app.services import auth_service, portal_service, report_service
+from app.schemas import (ClaimDetailOut, ClaimIn, EvidenceOut, FoundReportIn, FoundReportPatch, LoginIn, LostReportIn,
+                         LostReportPatch, MatchOut, MyReportsOut, NotificationOut, OkOut, RecoveryRequestOut,
+                         RegisterIn, ReportCreated, ReportOut, TokenOut, UserOut)
+from app.services import auth_service, claim_service, portal_service, report_service
 
 router = APIRouter(prefix="/api/v1")
 router.include_router(staff.router)
@@ -67,12 +67,12 @@ async def create_lost(db: DB, user: CurrentUser, category: Txt = None, item_name
 async def create_found(db: DB, user: CurrentUser, category: Txt = None, item_name: Txt = None,
                        description: Txt = None, colour: Txt = None, distinguishing_features: Txt = None,
                        custody_status: Txt = None, location: Txt = None,
-                       latitude: Txt = None, longitude: Txt = None, occurred_at: Txt = None,
+                       latitude: Txt = None, longitude: Txt = None, occurred_at: Txt = None, directions: Txt = None,
                        image: Annotated[UploadFile | None, File()] = None):
     data = _validate(FoundReportIn, dict(
         category=category, item_name=item_name, description=description, colour=colour,
         distinguishing_features=distinguishing_features, custody_status=custody_status,
-        location=location, latitude=latitude, longitude=longitude, occurred_at=occurred_at))
+        location=location, latitude=latitude, longitude=longitude, occurred_at=occurred_at, directions=directions))
     report, n = await report_service.create_found(db, user, data, image)
     return ReportCreated(message="Found item reported successfully", report_code=report.report_code,
                          custody_status=report.custody_status, matches_created=n)
@@ -132,8 +132,8 @@ def match_image(match_id: int, which: str, db: DB, user: CurrentUser):
 @router.post("/matches/{match_id}/interest", response_model=RecoveryRequestOut, status_code=201, tags=["matches"])
 def interest(match_id: int, db: DB, user: CurrentUser, body: ClaimIn | None = None):
     """'Might be mine': opens a claim for staff to verify. `proof` = details only the owner would know."""
-    req, _created = portal_service.express_interest(db, user, match_id, body.proof if body else None)
-    return req
+    req, _created = portal_service.express_interest(db, user, match_id, body)
+    return claim_service.claim_out(db, req)
 
 
 @router.post("/matches/{match_id}/dismiss", response_model=MatchOut, tags=["matches"])
@@ -152,9 +152,32 @@ def recovery_requests(db: DB, user: CurrentUser):
     return portal_service.list_recovery_requests(db, user)
 
 
+@router.get("/recovery-requests/{request_id}", response_model=ClaimDetailOut, tags=["matches"])
+def recovery_request(request_id: int, db: DB, user: CurrentUser):
+    """One of the caller's own claims: progress, evidence, staff message, collection details once released."""
+    return portal_service.claim_detail(db, user, request_id)
+
+
 @router.post("/recovery-requests/{request_id}/cancel", response_model=RecoveryRequestOut, tags=["matches"])
 def cancel_claim(request_id: int, db: DB, user: CurrentUser):
     return portal_service.cancel_claim(db, user, request_id)
+
+
+@router.post("/recovery-requests/{request_id}/evidence", response_model=EvidenceOut, status_code=201,
+             tags=["matches"])
+async def add_evidence(request_id: int, db: DB, user: CurrentUser, note: Txt = None,
+                       image: Annotated[UploadFile | None, File()] = None):
+    """Attach optional ownership evidence (photo and/or note) to your own claim."""
+    ev = await portal_service.add_evidence(db, user, request_id, note, image)
+    return EvidenceOut(id=ev.id, note=ev.note, has_image=bool(ev.file_name), created_at=ev.created_at, added_by="You")
+
+
+@router.get("/recovery-requests/{request_id}/evidence/{evidence_id}/file", tags=["matches"],
+            responses={200: {"content": {"image/*": {}}}})
+def evidence_file(request_id: int, evidence_id: int, db: DB, user: CurrentUser):
+    """Private evidence photo: only the claimant and staff (never a public URL)."""
+    return FileResponse(portal_service.evidence_file(db, user, request_id, evidence_id),
+                        headers={"Cache-Control": "private, no-store"})
 
 
 # ---------------- notifications ----------------

@@ -8,10 +8,13 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.errors import conflict, not_found
+from app.core.errors import conflict, not_found, unprocessable
+from app.integrations import ai_modules
 from app.models import (FoundReport, LostReport, MatchResult, Notification, RecoveryRequest, StaffAction, User)
-from app.schemas import (Analytics, MatchRow, Party, PendingDepositOut, PersonRow, RecoveryCaseOut, ReportRow,
-                         StaffActionOut, StaffSummary)
+from app.schemas import (Analytics, CaseDetailOut, ClaimantOut, CollectionIn, MatchRow, MatchScoresOut, Party,
+                         PendingDepositOut, PersonRow, RecoveryCaseOut, ReportRow, SignalOut, StaffActionOut,
+                         StaffSummary)
+from app.services import claim_service as cs
 from app.services.report_service import to_out
 
 
@@ -35,9 +38,15 @@ def audit(db: Session, staff: User, action: str, target_type: str, target_id: in
 
 # ---------------- summary ----------------
 def summary(db: Session) -> StaffSummary:
+    def n(*statuses):
+        return _count(db, RecoveryRequest, RecoveryRequest.status.in_(statuses))
     return StaffSummary(
-        claims_to_verify=_count(db, RecoveryRequest, RecoveryRequest.status == "PENDING"),
-        verified_awaiting_handover=_count(db, RecoveryRequest, RecoveryRequest.status == "VERIFIED"),
+        claims_to_verify=n("PENDING", "UNDER_REVIEW"),
+        verified_awaiting_handover=n(*cs.APPROVED),
+        total_lost=_count(db, LostReport), total_found=_count(db, FoundReport),
+        pending_requests=n("PENDING"), under_review=n("UNDER_REVIEW"),
+        evidence_requested=n("ADDITIONAL_EVIDENCE_REQUESTED"), approved_claims=n(*cs.APPROVED),
+        rejected_claims=n("REJECTED"), completed_recoveries=n("HANDED_OVER", "COMPLETED"),
         deposits_to_confirm=_count(db, FoundReport, FoundReport.custody_status == "AWAITING_DEPOSIT_CONFIRMATION"),
         finders_holding_items=_count(db, FoundReport, FoundReport.custody_status == "TEMPORARILY_HOLDING",
                                      FoundReport.status == "ACTIVE"),
@@ -72,16 +81,67 @@ def confirm_deposit(db: Session, staff: User, report_id: int) -> None:
 
 
 # ---------------- claims ----------------
-def _case(db: Session, req: RecoveryRequest) -> RecoveryCaseOut:
+def _ctx(db: Session, req: RecoveryRequest):
     m = db.get(MatchResult, req.match_id)
-    lost, found = m.lost_report, m.found_report
+    return m, m.lost_report, m.found_report
+
+
+def _case(db: Session, req: RecoveryRequest) -> RecoveryCaseOut:
+    m, lost, found = _ctx(db, req)
     return RecoveryCaseOut(
         id=req.id, status=req.status, proof=req.proof, created_at=req.created_at, verified_at=req.verified_at,
         completed_at=req.completed_at, match_id=m.id, fusion_score=m.fusion_score,
         lost_report=to_out(lost), found_report=to_out(found),
         found_location=found.location.address if found.location else None,
         owner=Party(name=lost.user.name, email=lost.user.email),
-        finder=Party(name=found.user.name, email=found.user.email))
+        finder=Party(name=found.user.name, email=found.user.email),
+        handed_over_at=req.handed_over_at, staff_message=req.staff_message, rejection_reason=req.rejection_reason,
+        evidence_count=cs.evidence_count(db, req), claim_features=req.claim_features, claim_notes=req.claim_notes)
+
+
+def _scores(db: Session, m: MatchResult) -> MatchScoresOut:
+    rows = [("image_similarity", "Photo ↔ photo", m.image_similarity, "visual signal, weight 70%"),
+            ("words_photo_similarity", "Description ↔ found photo", m.words_photo_similarity,
+             "used instead of the photo signal when the lost report has no photo"),
+            ("text_similarity", "Text ↔ text", m.text_similarity, "weight 20%"),
+            ("location_similarity", "Location", m.location_similarity, "weight 10%")]
+    signals = [SignalOut(key=k, label=l, value=v, weight_note=n) for k, l, v, n in rows]
+    have = [f"{l.lower()} {round(v * 100)}%" for _, l, v, _ in rows if v is not None]
+    missing = [l.lower() for _, l, v, _ in rows if v is None]
+    explanation = (f"Relevance {round((m.fusion_score or 0) * 100)}% is a weighted blend of: " +
+                   (", ".join(have) if have else "no available signals") + "." +
+                   (f" Not available (left out, not counted as zero): {', '.join(missing)}." if missing else "") +
+                   " A high score only means the two reports look alike. It is not proof of ownership; "
+                   "decide from the claimant's evidence and your own checks.")
+    ll, fl = m.lost_report.location, m.found_report.location
+    dist = ai_modules.distance_m(ll.latitude, ll.longitude, fl.latitude, fl.longitude) if ll and fl else None
+    return MatchScoresOut(fusion_score=m.fusion_score, signals=signals, explanation=explanation, distance_m=dist)
+
+
+def _get_req(db: Session, request_id: int) -> RecoveryRequest:
+    req = db.get(RecoveryRequest, request_id)
+    if not req:
+        raise not_found("Recovery request not found.")
+    return req
+
+
+def case_detail(db: Session, staff: User, request_id: int) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    m, lost, found = _ctx(db, req)
+    owner = lost.user
+    mine = db.scalars(select(RecoveryRequest).where(RecoveryRequest.requester_id == owner.id)).all()
+    claimant = ClaimantOut(
+        name=owner.name, email=owner.email, role=owner.role, account_created_at=owner.created_at,
+        lost_reports=_count(db, LostReport, LostReport.user_id == owner.id),
+        found_reports=_count(db, FoundReport, FoundReport.user_id == owner.id), claims_total=len(mine),
+        claims_completed=sum(c.status in ("HANDED_OVER", "COMPLETED") for c in mine),
+        claims_rejected=sum(c.status == "REJECTED" for c in mine))
+    by = db.get(User, req.handed_over_by_id) if req.handed_over_by_id else None
+    return CaseDetailOut(
+        **_case(db, req).model_dump(), claimant=claimant, match=_scores(db, m),
+        found_directions=found.directions, evidence=cs.evidence_list(db, req, staff),
+        events=cs.events_list(db, req, staff), collection=cs.collection_out(req),
+        handed_over_by=by.name if by else None, allowed_actions=cs.allowed_actions(req))
 
 
 def list_cases(db: Session, status: str | None = None, q: str | None = None) -> list[RecoveryCaseOut]:
@@ -94,50 +154,155 @@ def list_cases(db: Session, status: str | None = None, q: str | None = None) -> 
                                      c.finder.email, c.proof)]
 
 
-# status machine: PENDING -> VERIFIED -> COMPLETED ; PENDING -> REJECTED ; (owner) PENDING/VERIFIED -> CANCELLED
-_TRANSITIONS = {"verify": ("PENDING", "VERIFIED"), "reject": ("PENDING", "REJECTED"),
-                "complete": ("VERIFIED", "COMPLETED")}
+def _step(db: Session, staff: User, req: RecoveryRequest, to: str, action: str, note: str | None = None,
+          audit_action: str | None = None) -> str:
+    """Validated transition + claim history + staff audit log (all in the caller's transaction)."""
+    prev = cs.move(db, req, to, staff, action, note)
+    lost = db.get(MatchResult, req.match_id).lost_report
+    detail = f"{prev} -> {to}" + (f": {note}" if note else "")
+    audit(db, staff, audit_action or action, "claim", req.id, lost.report_code, detail[:200])
+    return prev
 
 
-def advance_case(db: Session, staff: User, request_id: int, action: str) -> RecoveryCaseOut:
-    req = db.get(RecoveryRequest, request_id)
-    if not req:
-        raise not_found("Recovery request not found.")
-    src, dst = _TRANSITIONS[action]
-    if req.status != src:
-        raise conflict(f"Cannot {action} a request that is {req.status}.", "invalid_transition")
-    m = db.get(MatchResult, req.match_id)
-    lost, found = m.lost_report, m.found_report
-    if dst == "VERIFIED" and (lost.status != "ACTIVE" or found.status != "ACTIVE"):
-        raise conflict("This item was already recovered or closed.", "report_closed")
-    req.status = dst
-    texts = {
-        "VERIFIED": ("Ownership verified",
-                     f"Your claim for {lost.report_code} was verified. Please collect your item from the "
-                     "lost-and-found office with your ID."),
-        "REJECTED": ("Claim declined",
-                     f"Staff could not verify your claim for {lost.report_code}. Other matches stay available."),
-        "COMPLETED": ("Item returned", f"Your item {lost.report_code} ({lost.item_name}) was handed over. "
-                                       "We're glad it's back with you."),
-    }
-    title, msg = texts[dst]
-    db.add(Notification(user_id=lost.user_id, title=title, message=msg, related_report_id=lost.id, match_id=m.id))
-    if dst == "VERIFIED":
-        req.verified_at = _now()
-        # the finder learns only that staff are handling it; never the owner's identity
-        db.add(Notification(user_id=found.user_id, title="Staff are handling your found item",
-                            message=f"A claim for {found.report_code} was verified. Staff may contact you; "
-                                    "no action is needed until they do.", related_report_id=found.id))
-    if dst == "COMPLETED":
-        req.completed_at = _now()
-        lost.status = found.status = "RECOVERED"
-        db.add(Notification(user_id=found.user_id, title="Thank you — item returned",
-                            message=f"The item you reported ({found.report_code}) was returned to its owner.",
-                            related_report_id=found.id))
-    audit(db, staff, f"CLAIM_{dst}", "claim", req.id, lost.report_code, f"{src} -> {dst}")
+def start_review(db: Session, staff: User, request_id: int, note: str | None = None) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    m, lost, _ = _ctx(db, req)
+    if req.status != "PENDING":
+        raise conflict(f"Only a pending request can be put under review (this one is {req.status}).", "invalid_transition")
+    _step(db, staff, req, "UNDER_REVIEW", "REVIEW_STARTED", note, "CLAIM_REVIEW_STARTED")
+    cs.notify(db, lost.user_id, "Your claim is under review",
+              f"Staff started reviewing your claim for {lost.report_code}.", lost.id, m.id)
     db.commit()
-    return _case(db, req)
+    return case_detail(db, staff, request_id)
 
+
+def request_evidence(db: Session, staff: User, request_id: int, message: str) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    m, lost, _ = _ctx(db, req)
+    if req.status not in ("PENDING", "UNDER_REVIEW"):
+        raise conflict(f"Evidence cannot be requested for a {req.status} request.", "invalid_transition")
+    _step(db, staff, req, "ADDITIONAL_EVIDENCE_REQUESTED", "EVIDENCE_REQUESTED", message, "CLAIM_EVIDENCE_REQUESTED")
+    req.staff_message = message
+    cs.notify(db, lost.user_id, "More evidence needed",
+              f"Staff need more information to verify your claim for {lost.report_code}: {message}", lost.id, m.id)
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def _apply_collection(req: RecoveryRequest, data: CollectionIn) -> None:
+    req.collection_name, req.collection_address = data.name, data.address
+    req.collection_latitude, req.collection_longitude = data.latitude, data.longitude
+    req.collection_instructions, req.collection_set_at = data.instructions, _now()
+
+
+def _release_collection(db: Session, staff: User, req: RecoveryRequest, data: CollectionIn) -> None:
+    """Staff choose where the owner collects (a campus drop point / office, never the finder's own address)."""
+    m, lost, _ = _ctx(db, req)
+    first = req.status == "VERIFIED"
+    _apply_collection(req, data)
+    if first:
+        _step(db, staff, req, "AWAITING_COLLECTION", "COLLECTION_SET", f"Collect at: {data.name}", "COLLECTION_SET")
+    else:
+        cs.add_event(db, req, staff, "COLLECTION_UPDATED", req.status, req.status, f"Collect at: {data.name}")
+        audit(db, staff, "COLLECTION_UPDATED", "claim", req.id, lost.report_code, f"Collect at: {data.name}"[:200])
+    where = data.name + (f", {data.address}" if data.address else "")
+    cs.notify(db, lost.user_id, "Collection instructions available" if first else "Collection details updated",
+              f"Your item {lost.report_code} is ready to collect at {where}." +
+              (f" {data.instructions}" if data.instructions else ""), lost.id, m.id)
+
+
+def approve(db: Session, staff: User, request_id: int, note: str | None = None,
+            collection: CollectionIn | None = None) -> CaseDetailOut:
+    """Staff decision: ownership accepted (status VERIFIED). Optionally release the collection place at once."""
+    req = _get_req(db, request_id)
+    m, lost, found = _ctx(db, req)
+    if req.status not in cs.IN_REVIEW:
+        raise conflict(f"Cannot approve a request that is {req.status}.", "invalid_transition")
+    if lost.status != "ACTIVE" or found.status != "ACTIVE":
+        raise conflict("This item was already recovered or closed.", "report_closed")
+    rival = db.scalar(select(func.count()).select_from(RecoveryRequest).join(
+        MatchResult, RecoveryRequest.match_id == MatchResult.id).where(
+        MatchResult.found_report_id == found.id, RecoveryRequest.id != req.id,
+        RecoveryRequest.status.in_((*cs.APPROVED, "HANDED_OVER"))))
+    if rival:
+        raise conflict("Another claim for this found item is already approved.", "already_approved")
+    _step(db, staff, req, "VERIFIED", "CLAIM_APPROVED", note, "CLAIM_VERIFIED")
+    req.verified_at = _now()
+    req.staff_message = note
+    cs.notify(db, lost.user_id, "Ownership verified",
+              f"Your claim for {lost.report_code} was approved." +
+              (" Collection details follow." if not collection else ""), lost.id, m.id)
+    # the finder learns only that staff are handling it; never the owner's identity
+    cs.notify(db, found.user_id, "Staff are handling your found item",
+              f"A claim for {found.report_code} was verified. Staff may contact you; no action is needed until they do.",
+              found.id)
+    if collection:
+        _release_collection(db, staff, req, collection)
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def reject(db: Session, staff: User, request_id: int, reason: str) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    m, lost, _ = _ctx(db, req)
+    if req.status not in cs.IN_REVIEW:
+        raise conflict(f"Cannot reject a request that is {req.status}.", "invalid_transition")
+    _step(db, staff, req, "REJECTED", "CLAIM_REJECTED", reason)
+    req.rejection_reason = reason
+    cs.notify(db, lost.user_id, "Claim declined",
+              f"Staff could not verify your claim for {lost.report_code}. Reason: {reason} "
+              "Other matches stay available.", lost.id, m.id)
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def add_note(db: Session, staff: User, request_id: int, note: str | None) -> CaseDetailOut:
+    """Internal verification note: visible to staff only, never to the owner or finder."""
+    if not note:
+        raise unprocessable("A note cannot be empty.")
+    req = _get_req(db, request_id)
+    lost = db.get(MatchResult, req.match_id).lost_report
+    cs.add_event(db, req, staff, "NOTE", note=note, internal=True)
+    audit(db, staff, "CLAIM_NOTE", "claim", req.id, lost.report_code, "internal note added")
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def set_collection(db: Session, staff: User, request_id: int, data: CollectionIn) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    if req.status not in cs.APPROVED:
+        raise conflict("Collection instructions can only be set for an approved claim.", "invalid_transition")
+    _release_collection(db, staff, req, data)
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def confirm_handover(db: Session, staff: User, request_id: int, note: str | None = None) -> CaseDetailOut:
+    """Physical handover: records when and by whom, closes both reports and notifies owner and finder."""
+    req = _get_req(db, request_id)
+    m, lost, found = _ctx(db, req)
+    if req.status != "AWAITING_COLLECTION":
+        raise conflict("Release the collection instructions before confirming handover.", "invalid_transition")
+    _step(db, staff, req, "HANDED_OVER", "HANDOVER_CONFIRMED", note, "CLAIM_HANDED_OVER")
+    req.handed_over_at, req.handed_over_by_id = _now(), staff.id
+    lost.status = found.status = "RECOVERED"
+    cs.notify(db, lost.user_id, "Item returned",
+              f"Your item {lost.report_code} ({lost.item_name}) was handed over. We're glad it's back with you.",
+              lost.id, m.id)
+    cs.notify(db, found.user_id, "Thank you — item returned",
+              f"The item you reported ({found.report_code}) was returned to its owner.", found.id)
+    db.commit()
+    return case_detail(db, staff, request_id)
+
+
+def complete(db: Session, staff: User, request_id: int, note: str | None = None) -> CaseDetailOut:
+    req = _get_req(db, request_id)
+    if req.status != "HANDED_OVER":
+        raise conflict(f"Only a handed-over request can be completed (this one is {req.status}).", "invalid_transition")
+    _step(db, staff, req, "COMPLETED", "RECOVERY_COMPLETED", note, "CLAIM_COMPLETED")
+    req.completed_at = _now()
+    db.commit()
+    return case_detail(db, staff, request_id)
 
 # ---------------- matching activity ----------------
 def match_rows(db: Session, filter_: str = "all", min_score: float | None = None, q: str | None = None) -> list[MatchRow]:
@@ -147,7 +312,7 @@ def match_rows(db: Session, filter_: str = "all", min_score: float | None = None
     out = []
     for m in db.scalars(select(MatchResult).order_by(MatchResult.id.desc())).all():
         status = claims.get(m.id)
-        claimed = status in ("PENDING", "VERIFIED", "COMPLETED")
+        claimed = status in cs.LIVE
         if filter_ == "claimed" and not claimed or filter_ == "unclaimed" and (claimed or m.dismissed) \
                 or filter_ == "dismissed" and not m.dismissed:
             continue
@@ -205,8 +370,8 @@ def analytics(db: Session) -> Analytics:
     lost_n, found_n = _count(db, LostReport), _count(db, FoundReport)
     claims = db.scalars(select(RecoveryRequest)).all()
     by_status = Counter(c.status for c in claims)
-    done = [c for c in claims if c.status == "COMPLETED" and c.completed_at]
-    hours = [(c.completed_at - c.created_at).total_seconds() / 3600 for c in done]
+    done = [c for c in claims if c.status in ("HANDED_OVER", "COMPLETED") and (c.handed_over_at or c.completed_at)]
+    hours = [((c.handed_over_at or c.completed_at) - c.created_at).total_seconds() / 3600 for c in done]
     cats: dict[str, dict] = {}
     for kind, model in (("lost", LostReport), ("found", FoundReport)):
         for cat, n in db.execute(select(model.category, func.count()).group_by(model.category)).all():

@@ -174,3 +174,17 @@ tbody tr:hover { background: var(--surface-2); } tr.click { cursor: pointer; }
   .main { padding: 18px 16px 50px; } .form-step { grid-template-columns: 1fr; gap: 12px; } .custody, .grid2, .lvf { grid-template-columns: 1fr; }
   .report-top { flex-wrap: wrap; } .report-actions { flex-direction: row; min-width: 0; } .stepper { font-size: 11px; padding: 14px 6px; }
 }
+
+/* claim evidence / collection */
+.photo-pick .proof-prev{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid var(--border)}
+.progress{position:relative;height:22px;border-radius:999px;background:var(--border);overflow:hidden;margin:8px 0}
+.progress i{position:absolute;inset:0 auto 0 0;background:var(--primary);transition:width .15s}
+.progress span{position:relative;display:block;text-align:center;font-size:12px;line-height:22px;color:#fff;mix-blend-mode:normal;font-weight:600}
+.claimbox.amber{border-color:#e8b04a;background:rgba(232,176,74,.12)}
+.collect{display:grid;gap:8px;margin:8px 0}
+.hist{display:grid;gap:6px;margin:6px 0}
+.hist .ev{padding:8px 10px;border:1px solid var(--border);border-radius:10px;font-size:13px}
+.hist .ev.internal{border-style:dashed;background:rgba(150,150,150,.1)}
+.ev-thumbs{display:flex;gap:8px;flex-wrap:wrap}
+.ev-thumbs img{width:90px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--border)}
+.act-panel{border:1px solid var(--border);border-radius:12px;padding:12px;margin:10px 0}

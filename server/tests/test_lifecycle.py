@@ -68,8 +68,10 @@ def test_claim_with_proof_and_staff_verification_timeline(client, make_user):
     assert any(n["title"] == "Ownership verified" and n["match_id"] == m["id"]
                for n in client.get(f"{H}/notifications", headers=a["headers"]).json())
 
+    client.post(f"{H}/staff/recovery-requests/{req['id']}/collection", headers=hs, json={"name": "Lost and found office"})
+    client.post(f"{H}/staff/recovery-requests/{req['id']}/handover", headers=hs)
     done = client.post(f"{H}/staff/recovery-requests/{req['id']}/complete", headers=hs).json()
-    assert done["status"] == "COMPLETED" and done["completed_at"]
+    assert done["status"] == "COMPLETED" and done["completed_at"] and done["handed_over_at"]
     mine = client.get(f"{H}/reports/mine", headers=a["headers"]).json()["lost"][0]
     assert mine["status"] == "RECOVERED" and mine["timeline"]["current_step"] == 6
     assert client.get(f"{H}/reports/mine", headers=b["headers"]).json()["found"][0]["status"] == "RECOVERED"
@@ -172,9 +174,9 @@ def test_staff_workspace_endpoints_and_audit_log(client, make_user):
     assert client.get(f"{H}/staff/reports?kind=found&q=ThingEta", headers=hs).json()
     assert client.get(f"{H}/staff/reports?kind=nope", headers=hs).status_code == 422
 
-    client.post(f"{H}/staff/recovery-requests/{req['id']}/reject", headers=hs)
+    client.post(f"{H}/staff/recovery-requests/{req['id']}/reject", headers=hs, json={"reason": "Not the same item"})
     log = client.get(f"{H}/staff/log?target=claim", headers=hs).json()
-    assert log[0]["action"] == "CLAIM_REJECTED" and log[0]["staff_name"] == "Staffer" and log[0]["detail"] == "PENDING -> REJECTED"
+    assert log[0]["action"] == "CLAIM_REJECTED" and log[0]["staff_name"] == "Staffer" and log[0]["detail"].startswith("PENDING -> REJECTED")
     assert client.get(f"{H}/staff/log?q=CLAIM_REJECTED", headers=hs).json()
 
     an = client.get(f"{H}/staff/analytics", headers=hs).json()

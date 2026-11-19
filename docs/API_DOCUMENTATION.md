@@ -108,3 +108,20 @@ Grant staff with `python scripts/create_staff.py <email>` (run from `server/`).
 | error `{"error":"text"}`; validation 400 | `{"error":{code,message,details}}`; validation 422 |
 | staff: only confirm-deposit | full staff set above; claim action `approve` is now `verify` |
 | — | new: images, dismiss/restore, cancel, resolve, edit, read-all, timeline, words↔photo signal, audit log, analytics, CSV |
+
+
+## Recovery workflow additions
+
+See `docs/RECOVERY_WORKFLOW.md` for the lifecycle. Added or changed endpoints (the OpenAPI page at `/docs` is the full reference):
+
+| Method and path | Who | Purpose |
+|---|---|---|
+| `POST /matches/{id}/interest` | owner | body now accepts `proof`, `distinguishing_features`, `additional_info` |
+| `GET /recovery-requests/{id}` | claimant | own claim: status, staff message, rejection reason, evidence list, history, collection (once released) |
+| `POST /recovery-requests/{id}/evidence` | claimant | multipart `note` and/or `image` (JPG/PNG, 5 MB, max 5 per claim) |
+| `GET /recovery-requests/{id}/evidence/{eid}/file` | claimant, staff | private evidence photo |
+| `GET /staff/recovery-requests/{id}` | staff | full investigation view |
+| `POST /staff/recovery-requests/{id}/review, request-evidence, approve, reject, notes, collection, handover, complete` | staff | state transitions (see the workflow doc); `verify` kept as a deprecated alias of `approve` |
+| `POST /reports/found` | finder | new optional form field `directions` |
+
+Claim statuses: PENDING, UNDER_REVIEW, ADDITIONAL_EVIDENCE_REQUESTED, VERIFIED (approved), AWAITING_COLLECTION, HANDED_OVER, COMPLETED, REJECTED, CANCELLED. Breaking change: `POST /staff/recovery-requests/{id}/reject` requires `{"reason": "..."}`, and `complete` requires `HANDED_OVER`.

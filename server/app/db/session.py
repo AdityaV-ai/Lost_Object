@@ -39,7 +39,22 @@ ADDITIVE_COLUMNS = [
     ("recovery_requests", "proof", "TEXT"),
     ("recovery_requests", "verified_at", "DATETIME"),
     ("recovery_requests", "completed_at", "DATETIME"),
+    ("found_reports", "directions", "TEXT"),
+    ("recovery_requests", "claim_features", "TEXT"),
+    ("recovery_requests", "claim_notes", "TEXT"),
+    ("recovery_requests", "staff_message", "TEXT"),
+    ("recovery_requests", "rejection_reason", "TEXT"),
+    ("recovery_requests", "collection_name", "VARCHAR(200)"),
+    ("recovery_requests", "collection_address", "VARCHAR(500)"),
+    ("recovery_requests", "collection_latitude", "FLOAT"),
+    ("recovery_requests", "collection_longitude", "FLOAT"),
+    ("recovery_requests", "collection_instructions", "TEXT"),
+    ("recovery_requests", "collection_set_at", "DATETIME"),
+    ("recovery_requests", "handed_over_at", "DATETIME"),
+    ("recovery_requests", "handed_over_by_id", "INTEGER"),
 ]
+# New tables (claim_evidence, claim_events) are plain additions created by create_all; existing tables are only
+# ever changed through the additive column list above.
 
 
 def init_db(bind=None) -> None:

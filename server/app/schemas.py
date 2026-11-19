@@ -108,9 +108,10 @@ class FoundReportIn(_Place):
     colour: str | None = Field(default=None, max_length=80)
     distinguishing_features: str | None = None
     custody_status: CustodyStatus = "LEFT_WHERE_FOUND"
+    directions: str | None = Field(default=None, max_length=1000)
 
     @field_validator("item_name", "category", "description", "colour", "distinguishing_features", "location",
-                     mode="before")
+                     "directions", mode="before")
     @classmethod
     def _strip(cls, v):
         return _clean(v) if isinstance(v, str) else v
@@ -140,6 +141,7 @@ class ReportOut(ORM):
     brand: str | None = None           # lost reports only
     model: str | None = None           # lost reports only
     distinguishing_features: str | None = None
+    directions: str | None = None      # found reports: extra directions (reporter and staff only)
     location: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -184,9 +186,10 @@ class FoundReportPatch(_Place):
     colour: str | None = Field(default=None, max_length=80)
     distinguishing_features: str | None = None
     custody_status: CustodyStatus | None = None
+    directions: str | None = Field(default=None, max_length=1000)
 
     @field_validator("item_name", "category", "description", "colour", "distinguishing_features", "location",
-                     mode="before")
+                     "directions", mode="before")
     @classmethod
     def _strip(cls, v):
         return _clean(v) if isinstance(v, str) else v
@@ -211,26 +214,125 @@ class FoundCandidate(BaseModel):
 
 class ClaimIn(BaseModel):
     """'Might be mine': optional details only the owner would know, shown to staff (never to the finder)."""
-    proof: str | None = Field(default=None, max_length=1000)
+    proof: str | None = Field(default=None, max_length=1000)              # why the owner believes it is theirs
+    distinguishing_features: str | None = Field(default=None, max_length=1000)
+    additional_info: str | None = Field(default=None, max_length=1000)
 
-    @field_validator("proof", mode="before")
+    @field_validator("proof", "distinguishing_features", "additional_info", mode="before")
     @classmethod
     def _strip(cls, v):
         return _clean(v) if isinstance(v, str) else v
 
 
-class ClaimOut(ORM):
+class CollectionIn(BaseModel):
+    """Where and how the owner collects an approved item. Always chosen by staff (never the finder's own address)."""
+    name: str = Field(min_length=1, max_length=200)
+    address: str | None = Field(default=None, max_length=500)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    instructions: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("name", "address", "instructions", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return _clean(v) if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _pair(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("Both latitude and longitude are required together.")
+        return self
+
+
+class CollectionOut(BaseModel):
+    name: str | None = None
+    address: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    instructions: str | None = None
+    maps_url: str | None = None   # only when valid coordinates exist; no API key needed
+    osm_url: str | None = None
+    set_at: datetime | None = None
+
+
+class ClaimOut(BaseModel):
     id: int
     match_id: int
     status: str
     proof: str | None = None
+    claim_features: str | None = None
+    claim_notes: str | None = None
     created_at: datetime
     verified_at: datetime | None = None
     completed_at: datetime | None = None
+    handed_over_at: datetime | None = None
+    staff_message: str | None = None      # latest message from staff (evidence request / instructions)
+    rejection_reason: str | None = None
+    evidence_count: int = 0
+    collection: CollectionOut | None = None   # only after staff released collection instructions
 
 
 class RecoveryRequestOut(ClaimOut):
     pass
+
+
+class EvidenceOut(BaseModel):
+    id: int
+    note: str | None = None
+    has_image: bool
+    created_at: datetime
+    added_by: str | None = None            # "You" / claimant name (staff view)
+
+
+class EventOut(BaseModel):
+    id: int
+    action: str
+    from_status: str | None = None
+    to_status: str | None = None
+    note: str | None = None
+    internal: bool = False
+    actor_name: str
+    actor_role: str
+    created_at: datetime
+
+
+class ClaimDetailOut(ClaimOut):
+    """Owner's view of one claim: its progress, evidence and (non-internal) history."""
+    lost_report: "ReportOut"
+    found: "FoundCandidate"
+    evidence: list[EvidenceOut] = []
+    events: list[EventOut] = []
+
+
+class MessageIn(BaseModel):
+    message: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return _clean(v) if isinstance(v, str) else v
+
+
+class ReasonIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return _clean(v) if isinstance(v, str) else v
+
+
+class NoteIn(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _strip(cls, v):
+        return _clean(v) if isinstance(v, str) else v
+
+
+class ApproveIn(NoteIn):
+    collection: CollectionIn | None = None   # optionally release collection instructions in the same step
 
 
 class MatchOut(BaseModel):
@@ -302,16 +404,70 @@ class RecoveryCaseOut(BaseModel):
     found_location: str | None = None
     owner: Party
     finder: Party
+    handed_over_at: datetime | None = None
+    staff_message: str | None = None
+    rejection_reason: str | None = None
+    evidence_count: int = 0
+    claim_features: str | None = None
+    claim_notes: str | None = None
+
+
+class ClaimantOut(BaseModel):
+    """What staff may check about the claimant when verifying ownership."""
+    name: str
+    email: str
+    role: str
+    account_created_at: datetime
+    lost_reports: int
+    found_reports: int
+    claims_total: int
+    claims_completed: int
+    claims_rejected: int
+
+
+class SignalOut(BaseModel):
+    key: str
+    label: str
+    value: float | None        # 0..1, None = signal unavailable (excluded from the fused score)
+    weight_note: str
+
+
+class MatchScoresOut(BaseModel):
+    fusion_score: float | None
+    signals: list[SignalOut]
+    explanation: str           # derived from the stored scores only; always states that it is not proof
+    distance_m: float | None = None
+
+
+class CaseDetailOut(RecoveryCaseOut):
+    """Full investigation view. Staff only."""
+    claimant: ClaimantOut
+    match: MatchScoresOut
+    found_directions: str | None = None
+    evidence: list[EvidenceOut] = []
+    events: list[EventOut] = []
+    collection: CollectionOut | None = None
+    handed_over_by: str | None = None
+    allowed_actions: list[str] = []   # actions valid from the current status
 
 
 class StaffSummary(BaseModel):
-    claims_to_verify: int
-    verified_awaiting_handover: int
+    claims_to_verify: int              # PENDING + UNDER_REVIEW (needs staff attention)
+    verified_awaiting_handover: int    # approved: VERIFIED + AWAITING_COLLECTION
     deposits_to_confirm: int
     finders_holding_items: int
     active_lost: int
     active_found: int
     users: int
+    # workflow dashboard (additive)
+    total_lost: int = 0
+    total_found: int = 0
+    pending_requests: int = 0
+    under_review: int = 0
+    evidence_requested: int = 0
+    approved_claims: int = 0           # VERIFIED + AWAITING_COLLECTION
+    rejected_claims: int = 0
+    completed_recoveries: int = 0      # HANDED_OVER + COMPLETED
 
 
 class MatchRow(BaseModel):

@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { DevQuickLogin } from "../components/DevQuickLogin";
 import { Icon } from "../components/Icon";
 import { Logo, ThemeButton } from "../components/Layout";
 import { errorText } from "../utils";
@@ -51,6 +52,7 @@ export function Login() {
         <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? "Signing in…" : "Log in"}</button>
       </form>
       <p className="muted" style={{ textAlign: "center", marginTop: 16 }}>New here? <Link to="/register">Create an account</Link></p>
+      <DevQuickLogin />
     </Shell>
   );
 }

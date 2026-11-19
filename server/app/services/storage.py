@@ -14,7 +14,10 @@ from app.models import Location
 ALLOWED_EXT = {"png", "jpg", "jpeg"}
 
 
-async def store_image(file: UploadFile | None) -> str | None:
+EVIDENCE_DIR = "evidence"   # private sub-folder; never served statically
+
+
+async def store_image(file: UploadFile | None, subdir: str | None = None) -> str | None:
     """Validate (extension, size, real image content) and save under a random name."""
     if file is None or not file.filename:
         return None
@@ -32,13 +35,18 @@ async def store_image(file: UploadFile | None) -> str | None:
     if fmt not in ("PNG", "JPEG"):
         raise unprocessable("Only JPG, JPEG and PNG images are allowed.")
     name = uuid.uuid4().hex + (".png" if fmt == "PNG" else ".jpg")
-    settings.upload_dir.mkdir(parents=True, exist_ok=True)
-    (settings.upload_dir / name).write_bytes(data)
+    folder = settings.upload_dir / subdir if subdir else settings.upload_dir
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(data)
     return name
 
 
 def upload_path(filename: str) -> Path:
     return settings.upload_dir / Path(filename).name  # strip any directory components
+
+
+def evidence_path(filename: str) -> Path:
+    return settings.upload_dir / EVIDENCE_DIR / Path(filename).name
 
 
 def make_location(db: Session, address: str | None, latitude: float | None,

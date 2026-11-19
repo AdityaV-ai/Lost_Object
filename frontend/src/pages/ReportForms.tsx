@@ -169,6 +169,7 @@ export function ReportFound() {
         </Step>
         <Step n={4} title="Where did you find it?" hint="Optional, but it helps match it with the right owner.">
           <LocationPicker label="Found at" value={place} onChange={setPlace} />
+          <label style={{ marginTop: 10 }}>Extra directions (optional, only you and staff see this)<textarea name="directions" maxLength={1000} placeholder="e.g. behind the bench next to the north entrance" /></label>
         </Step>
         {msg && <div className="msg error" role="alert">{msg}</div>}
         {ok && <div className="msg success" role="status">{ok} <Link to="/dashboard?tab=found">View my found reports</Link></div>}

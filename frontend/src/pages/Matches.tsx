@@ -1,28 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Match } from "../api/types";
 import { Icon } from "../components/Icon";
-import { Modal } from "../components/Modal";
+import { ClaimForm, ClaimStatus } from "../components/ClaimWidgets";
 import { SecureImage } from "../components/SecureImage";
 import { Async, Empty, useAsync } from "../components/States";
 import { SignalBars } from "../components/Widgets";
 import { CUSTODY_TEXT, errorText, fmtDateTime, pct } from "../utils";
-
-function ClaimBox({ m, onCancel }: { m: Match; onCancel: () => void }) {
-  const c = m.claim;
-  if (!c) return null;
-  if (c.status === "PENDING") return (
-    <div className="claimbox"><b><span className="dot" /> Pending staff review</b>
-      You claimed this item. Campus staff will check your details and notify you — the finder never sees your name.
-      <div style={{ marginTop: 8 }}><button className="btn btn-sm btn-danger" onClick={onCancel}>Cancel my claim</button></div></div>);
-  if (c.status === "VERIFIED") return (
-    <div className="claimbox green"><b><span className="dot" /> Verified — ready to collect</b>
-      Staff confirmed it is yours. Collect it from the lost-and-found office with your ID.</div>);
-  if (c.status === "COMPLETED") return <div className="claimbox green"><b>Returned to you</b>Recovery complete.</div>;
-  if (c.status === "REJECTED") return <div className="claimbox red"><b>Claim declined</b>Staff could not verify this claim.</div>;
-  return null;
-}
 
 function MatchCard({ m, flash, onChange }: { m: Match; flash: boolean; onChange: () => void }) {
   const [proofOpen, setProofOpen] = useState(false);
@@ -30,18 +15,12 @@ function MatchCard({ m, flash, onChange }: { m: Match; flash: boolean; onChange:
   const [msg, setMsg] = useState("");
   const ref = useRef<HTMLElement>(null);
   useEffect(() => { if (flash) ref.current?.scrollIntoView({ block: "center", behavior: "smooth" }); }, [flash]);
-  const open = m.claim && ["PENDING", "VERIFIED", "COMPLETED", "REJECTED"].includes(m.claim.status);
+  const open = m.claim && m.claim.status !== "CANCELLED";
   const f = m.found;
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true); setMsg("");
     try { await fn(); onChange(); } catch (e) { setMsg(errorText(e)); } finally { setBusy(false); }
   };
-  async function submitClaim(e: FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    const proof = String(new FormData(e.currentTarget).get("proof") ?? "").trim();
-    setProofOpen(false);
-    await act(() => api.claim(m.id, proof));
-  }
   return (
     <article ref={ref} className={`card match${m.dismissed ? " dim" : ""}${flash ? " flash" : ""}`}>
       <div className="photo">
@@ -70,7 +49,7 @@ function MatchCard({ m, flash, onChange }: { m: Match; flash: boolean; onChange:
             <dt>Found</dt><dd>{fmtDateTime(f.occurred_at ?? f.reported_at)}</dd>
           </dl>
         </details>
-        <ClaimBox m={m} onCancel={() => void act(() => api.cancelClaim(m.claim!.id))} />
+        {m.claim && <ClaimStatus c={m.claim} onChange={onChange} onCancel={() => void act(() => api.cancelClaim(m.claim!.id))} />}
         {msg && <div className="msg error" role="alert">{msg}</div>}
         {!open && !m.dismissed && (
           <div className="row" style={{ marginTop: "auto" }}>
@@ -79,17 +58,7 @@ function MatchCard({ m, flash, onChange }: { m: Match; flash: boolean; onChange:
           </div>)}
         {m.dismissed && <button className="btn" style={{ marginTop: "auto" }} disabled={busy} onClick={() => void act(() => api.restore(m.id))}>Restore this match</button>}
       </div>
-      {proofOpen && (
-        <Modal title="Claim this item" onClose={() => setProofOpen(false)}>
-          <p className="muted">Tell staff something only the owner would know. It is shown to staff only, never to the finder. You can leave it blank, but staff may ask you later.</p>
-          <form onSubmit={e => void submitClaim(e)} style={{ marginTop: 12 }}>
-            <label>Proof of ownership (optional)
-              <textarea name="proof" maxLength={1000} placeholder="e.g. a scratch near the bottom, lock-screen picture, what is inside…" /></label>
-            <div className="row" style={{ justifyContent: "flex-end", marginTop: 14 }}>
-              <button type="button" className="btn" onClick={() => setProofOpen(false)}>Cancel</button>
-              <button className="btn btn-primary">Send claim to staff</button></div>
-          </form>
-        </Modal>)}
+      {proofOpen && <ClaimForm m={m} onClose={() => setProofOpen(false)} onDone={() => { setProofOpen(false); onChange(); }} />}
     </article>
   );
 }

@@ -9,13 +9,28 @@ export interface Report {
   id: number; report_code: string; item_name: string; category: string; description: string | null;
   status: string; created_at: string; has_image: boolean; custody_status: string | null;
   colour: string | null; brand: string | null; model: string | null; distinguishing_features: string | null;
-  location: string | null; latitude: number | null; longitude: number | null; occurred_at: string | null;
+  directions?: string | null; location: string | null; latitude: number | null; longitude: number | null; occurred_at: string | null;
   match_count: number; timeline: Timeline | null; claim_status: string | null;
 }
 export interface MyReports { lost: Report[]; found: Report[] }
 export interface ReportCreated { message: string; report_code: string; matches_created: number; custody_status: string | null }
 
-export interface Claim { id: number; match_id: number; status: string; proof: string | null; created_at: string; verified_at: string | null; completed_at: string | null }
+export interface Collection {
+  name: string | null; address: string | null; latitude: number | null; longitude: number | null;
+  instructions: string | null; maps_url: string | null; osm_url: string | null; set_at: string | null;
+}
+export interface Claim {
+  id: number; match_id: number; status: string; proof: string | null; claim_features: string | null; claim_notes: string | null;
+  created_at: string; verified_at: string | null; completed_at: string | null; handed_over_at: string | null;
+  staff_message: string | null; rejection_reason: string | null; evidence_count: number; collection: Collection | null;
+}
+export interface Evidence { id: number; note: string | null; has_image: boolean; created_at: string; added_by: string | null }
+export interface ClaimEvent {
+  id: number; action: string; from_status: string | null; to_status: string | null; note: string | null;
+  internal: boolean; actor_name: string; actor_role: string; created_at: string;
+}
+export interface ClaimDetail extends Claim { lost_report: Report; found: FoundCandidate; evidence: Evidence[]; events: ClaimEvent[] }
+export interface ClaimInput { proof?: string; distinguishing_features?: string; additional_info?: string }
 export interface FoundCandidate {
   item_name: string; category: string; description: string | null; colour: string | null;
   distinguishing_features: string | null; location: string | null; latitude: number | null; longitude: number | null;
@@ -37,11 +52,22 @@ export interface PendingDeposit {
 export interface RecoveryCase {
   id: number; status: string; proof: string | null; created_at: string; verified_at: string | null; completed_at: string | null;
   match_id: number; fusion_score: number | null; lost_report: Report; found_report: Report; found_location: string | null;
-  owner: Party; finder: Party;
+  owner: Party; finder: Party; handed_over_at: string | null; staff_message: string | null;
+  rejection_reason: string | null; evidence_count: number; claim_features: string | null; claim_notes: string | null;
+}
+export interface Signal { key: string; label: string; value: number | null; weight_note: string }
+export interface CaseDetail extends RecoveryCase {
+  claimant: { name: string; email: string; role: string; account_created_at: string; lost_reports: number;
+    found_reports: number; claims_total: number; claims_completed: number; claims_rejected: number };
+  match: { fusion_score: number | null; signals: Signal[]; explanation: string; distance_m: number | null };
+  found_directions: string | null; evidence: Evidence[]; events: ClaimEvent[]; collection: Collection | null;
+  handed_over_by: string | null; allowed_actions: string[];
 }
 export interface StaffSummary {
   claims_to_verify: number; verified_awaiting_handover: number; deposits_to_confirm: number;
   finders_holding_items: number; active_lost: number; active_found: number; users: number;
+  total_lost: number; total_found: number; pending_requests: number; under_review: number; evidence_requested: number;
+  approved_claims: number; rejected_claims: number; completed_recoveries: number;
 }
 export interface MatchRow {
   id: number; created_at: string; lost_code: string; lost_name: string; found_code: string; found_name: string;

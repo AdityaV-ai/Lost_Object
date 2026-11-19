@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import conflict, forbidden, not_found, unprocessable
 from app.models import FoundReport, LostReport, MatchResult, RecoveryRequest, User
 from app.schemas import FoundReportIn, FoundReportPatch, LostReportIn, LostReportPatch, ReportOut, Timeline
-from app.services import matching_service
+from app.services import claim_service, matching_service
 from app.services.storage import make_location, store_image, upload_path
 
 
@@ -18,7 +18,8 @@ def to_out(r) -> ReportOut:
         description=r.description, status=r.status, created_at=r.created_at, has_image=bool(r.image_path),
         custody_status=getattr(r, "custody_status", None), colour=getattr(r, "colour", None),
         brand=getattr(r, "brand", None), model=getattr(r, "model", None),
-        distinguishing_features=r.distinguishing_features, location=loc.address if loc else None,
+        distinguishing_features=r.distinguishing_features, directions=getattr(r, "directions", None),
+        location=loc.address if loc else None,
         latitude=loc.latitude if loc else None, longitude=loc.longitude if loc else None,
         occurred_at=r.occurred_at)
 
@@ -47,7 +48,8 @@ async def create_found(db: Session, user: User, data: FoundReportIn, image: Uplo
     report = FoundReport(
         report_code="TEMP", user_id=user.id, item_name=data.item_name, category=data.category,
         description=data.description, colour=data.colour, distinguishing_features=data.distinguishing_features,
-        image_path=image_name, custody_status=data.custody_status, occurred_at=data.occurred_at,
+        directions=data.directions, image_path=image_name, custody_status=data.custody_status,
+        occurred_at=data.occurred_at,
         location_id=make_location(db, data.location, data.latitude, data.longitude))
     db.add(report)
     db.flush()
@@ -62,10 +64,11 @@ def _lost_timeline(db: Session, r: LostReport) -> tuple[Timeline, str | None]:
     claims = db.scalars(select(RecoveryRequest).join(MatchResult, RecoveryRequest.match_id == MatchResult.id)
                         .where(MatchResult.lost_report_id == r.id)
                         .order_by(RecoveryRequest.id)).all()
-    live = [c for c in claims if c.status in ("PENDING", "VERIFIED", "COMPLETED")]
+    live = [c for c in claims if c.status in claim_service.LIVE]
     claimed = min((c.created_at for c in live), default=None)
     verified = min((c.verified_at for c in live if c.verified_at), default=None)
-    completed = min((c.completed_at for c in live if c.completed_at), default=None)
+    completed = min((c.handed_over_at or c.completed_at for c in live if c.handed_over_at or c.completed_at),
+                    default=None)
     steps = [r.created_at, first_match, claimed, verified, completed]
     current = next((i + 1 for i, s in enumerate(steps) if s is None), 6)
     return (Timeline(submitted_at=r.created_at, first_match_at=first_match, claimed_at=claimed,
@@ -126,8 +129,8 @@ def resolve_lost(db: Session, user: User, report_id: int) -> None:
     report.status = "RESOLVED"
     for req in db.scalars(select(RecoveryRequest).join(MatchResult, RecoveryRequest.match_id == MatchResult.id)
                           .where(MatchResult.lost_report_id == report.id,
-                                 RecoveryRequest.status.in_(("PENDING", "VERIFIED")))):
-        req.status = "CANCELLED"
+                                 RecoveryRequest.status.in_(claim_service.CANCELLABLE))):
+        claim_service.move(db, req, "CANCELLED", user, "CLAIM_CANCELLED", "Owner found the item themselves")
     db.commit()
 
 

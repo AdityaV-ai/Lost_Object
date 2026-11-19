@@ -1,5 +1,5 @@
 import type {
-  Analytics, ApiErrorBody, Claim, Match, MatchRow, MyReports, Notification, PendingDeposit, PersonRow, RecoveryCase,
+  Analytics, ApiErrorBody, CaseDetail, Claim, ClaimDetail, ClaimInput, Evidence, Match, MatchRow, MyReports, Notification, PendingDeposit, PersonRow, RecoveryCase,
   Report, ReportCreated, ReportRow, StaffAction, StaffSummary, TokenResponse, User,
 } from "./types";
 
@@ -67,7 +67,23 @@ export const api = {
 
   matches: (includeDismissed = false) => json<Match[]>(`/matches${qs({ include_dismissed: includeDismissed || undefined })}`),
   matchImage: async (id: number, which: "lost" | "found") => (await raw(`/matches/${id}/images/${which}`)).blob(),
-  claim: (id: number, proof?: string) => post<Claim>(`/matches/${id}/interest`, { proof: proof || null }),
+  claim: (id: number, d: ClaimInput) => post<Claim>(`/matches/${id}/interest`, d),
+  claimDetail: (id: number) => json<ClaimDetail>(`/recovery-requests/${id}`),
+  evidenceImage: async (rid: number, eid: number) => (await raw(`/recovery-requests/${rid}/evidence/${eid}/file`)).blob(),
+  addEvidence: (id: number, fd: FormData, onProgress?: (pct: number) => void) => new Promise<Evidence>((resolve, reject) => {
+    const x = new XMLHttpRequest();
+    x.open("POST", `${API}/recovery-requests/${id}/evidence`);
+    const t = tokenStore.get(); if (t) x.setRequestHeader("Authorization", `Bearer ${t}`);
+    x.upload.onprogress = e => { if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100)); };
+    x.onload = () => {
+      let b: Partial<ApiErrorBody> & Partial<Evidence> = {};
+      try { b = JSON.parse(x.responseText); } catch { /* ignore */ }
+      if (x.status >= 200 && x.status < 300) resolve(b as Evidence);
+      else reject(new ApiError(x.status, b.error?.code ?? "http_error", b.error?.message ?? `Upload failed (${x.status})`, b.error?.details));
+    };
+    x.onerror = () => reject(new ApiError(0, "network_error", "Cannot reach the server. Check your connection and try again."));
+    x.send(fd);
+  }),
   dismiss: (id: number) => post<Match>(`/matches/${id}/dismiss`),
   restore: (id: number) => post<Match>(`/matches/${id}/restore`),
   recoveryRequests: () => json<Claim[]>("/recovery-requests"),
@@ -83,7 +99,8 @@ export const api = {
     deposits: () => json<PendingDeposit[]>("/staff/found/pending-deposits"),
     confirmDeposit: (id: number) => post<{ ok: boolean }>(`/staff/found/${id}/confirm-deposit`),
     cases: (status?: string, q?: string) => json<RecoveryCase[]>(`/staff/recovery-requests${qs({ status, q })}`),
-    caseAction: (id: number, action: "verify" | "reject" | "complete") => post<RecoveryCase>(`/staff/recovery-requests/${id}/${action}`),
+    caseDetail: (id: number) => json<CaseDetail>(`/staff/recovery-requests/${id}`),
+    caseAct: (id: number, action: string, body?: unknown) => post<CaseDetail>(`/staff/recovery-requests/${id}/${action}`, body),
     matches: (filter?: string, minScore?: number, q?: string) => json<MatchRow[]>(`/staff/matches${qs({ filter, min_score: minScore, q })}`),
     people: (q?: string) => json<PersonRow[]>(`/staff/people${qs({ q })}`),
     reports: (kind: "lost" | "found", status?: string, q?: string) => json<ReportRow[]>(`/staff/reports${qs({ kind, status, q })}`),

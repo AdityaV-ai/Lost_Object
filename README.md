@@ -9,7 +9,7 @@ Owners report lost items (a photo is optional), finders report found items (with
 | AI modules (team code, unchanged) | `modules/` | scikit-learn, torch, open_clip |
 | Legacy Flask app (kept, deprecated) | `backend/` | Flask — shares the same DB/uploads |
 
-Documentation: [`docs/PROJECT_EXPLANATION.md`](docs/PROJECT_EXPLANATION.md) (start here) · [`USE_GUIDE`](docs/USE_GUIDE.md) (install from scratch) · [`ARCHITECTURE`](docs/ARCHITECTURE.md) · [`API_DOCUMENTATION`](docs/API_DOCUMENTATION.md) · [`MIGRATION_REPORT`](docs/MIGRATION_REPORT.md) · [`TESTING_REPORT`](docs/TESTING_REPORT.md) · [`VIDEO_REFERENCE_GAP_ANALYSIS`](docs/VIDEO_REFERENCE_GAP_ANALYSIS.md)
+Documentation: [`docs/PROJECT_EXPLANATION.md`](docs/PROJECT_EXPLANATION.md) (start here) · [`USE_GUIDE`](docs/USE_GUIDE.md) (install from scratch) · [`ARCHITECTURE`](docs/ARCHITECTURE.md) · [`API_DOCUMENTATION`](docs/API_DOCUMENTATION.md) · [`MIGRATION_REPORT`](docs/MIGRATION_REPORT.md) · [`TESTING_REPORT`](docs/TESTING_REPORT.md) · [`VIDEO_REFERENCE_GAP_ANALYSIS`](docs/VIDEO_REFERENCE_GAP_ANALYSIS.md) · [`RECOVERY_WORKFLOW`](docs/RECOVERY_WORKFLOW.md)
 
 ## Run it (Windows PowerShell)
 
@@ -44,7 +44,7 @@ cd server
 **Tests**
 ```powershell
 cd server
-.\.venv\Scripts\python.exe -m pytest -q      # expect: 36 passed (2 use the real model; they skip if it is unavailable)
+.\.venv\Scripts\python.exe -m pytest -q      # expect: 59 passed (2 use the real model; they skip if it is unavailable)
 cd ..\frontend
 npm run build      # includes strict TypeScript check
 ```

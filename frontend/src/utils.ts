@@ -18,7 +18,11 @@ export function statusChip(status: string): { cls: string; text: string } {
     case "RECOVERED": return { cls: "blue", text: "Returned" };
     case "RESOLVED": return { cls: "", text: "Found by owner" };
     case "PENDING": return { cls: "amber", text: "Pending staff review" };
-    case "VERIFIED": return { cls: "green", text: "Verified" };
+    case "UNDER_REVIEW": return { cls: "blue", text: "Under review" };
+    case "ADDITIONAL_EVIDENCE_REQUESTED": return { cls: "amber", text: "More evidence needed" };
+    case "VERIFIED": return { cls: "green", text: "Approved" };
+    case "AWAITING_COLLECTION": return { cls: "green", text: "Ready to collect" };
+    case "HANDED_OVER": return { cls: "blue", text: "Handed over" };
     case "COMPLETED": return { cls: "blue", text: "Completed" };
     case "REJECTED": return { cls: "red", text: "Rejected" };
     case "CANCELLED": return { cls: "", text: "Cancelled" };

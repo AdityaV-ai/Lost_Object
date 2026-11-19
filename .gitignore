@@ -9,3 +9,5 @@ backend/uploads/*
 !backend/uploads/.gitkeep
 desktop.ini
 *.tsbuildinfo
+
+demo_data/

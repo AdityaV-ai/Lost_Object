@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Analytics, PendingDeposit, RecoveryCase, Report } from "../api/types";
+import type { Analytics, CaseDetail, PendingDeposit, Report } from "../api/types";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 import { SecureImage } from "../components/SecureImage";
@@ -94,27 +94,134 @@ function ReportFacts({ r, kind, place }: { r: Report; kind: "lost" | "found"; pl
   );
 }
 
-function CaseDrawer({ c, onClose, onAct }: { c: RecoveryCase; onClose: () => void; onAct: (a: "verify" | "reject" | "complete") => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
+function ConfirmBtn({ label, confirmLabel, cls, disabled, onGo }: { label: string; confirmLabel: string; cls: string; disabled?: boolean; onGo: () => void }) {
+  const [armed, setArmed] = useState(false);
+  if (!armed) return <button type="button" className={`btn ${cls}`} disabled={disabled} onClick={() => setArmed(true)}>{label}</button>;
+  return <span className="row"><button type="button" className={`btn ${cls}`} onClick={() => { setArmed(false); onGo(); }}>{confirmLabel}</button>
+    <button type="button" className="btn btn-sm" onClick={() => setArmed(false)}>Back</button></span>;
+}
+
+function CollectionFields({ c, onSubmit, busy, label }: { c: CaseDetail["collection"]; onSubmit: (b: Record<string, unknown>) => void; busy: boolean; label: string }) {
   const [msg, setMsg] = useState("");
-  const run = async (a: "verify" | "reject" | "complete") => { setBusy(true); setMsg(""); try { await onAct(a); onClose(); } catch (e) { setMsg(errorText(e)); setBusy(false); } };
+  function go(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget); const v = (k: string) => String(f.get(k) ?? "").trim();
+    const lat = v("lat"), lon = v("lon");
+    if ((lat === "") !== (lon === "")) { setMsg("Enter both latitude and longitude, or neither."); return; }
+    setMsg("");
+    onSubmit({ name: v("name"), address: v("address") || null, instructions: v("instructions") || null,
+      latitude: lat === "" ? null : Number(lat), longitude: lon === "" ? null : Number(lon) });
+  }
   return (
-    <Modal side title={`Claim #${c.id}`} onClose={onClose}>
-      <div className="row"><Chip status={c.status} /><span className="chip">{pct(c.fusion_score)}% relevance</span>
-        <span className="muted tiny">Requested {fmtDateTime(c.created_at)}</span></div>
-      <div className="proof"><b>Owner's proof</b><p>{c.proof ?? "The owner did not add any detail. Ask them to describe the item before verifying."}</p></div>
-      <div className="row">
-        {c.status === "PENDING" && <><button className="btn btn-primary" disabled={busy} onClick={() => void run("verify")}><Icon name="shield" size={15} />Verify owner</button>
-          <button className="btn btn-danger" disabled={busy} onClick={() => void run("reject")}><Icon name="x" size={15} />Reject</button></>}
-        {c.status === "VERIFIED" && <button className="btn btn-primary" disabled={busy} onClick={() => void run("complete")}><Icon name="check" size={15} />Mark as handed over</button>}
+    <form onSubmit={go}>
+      <div className="grid2">
+        <label>Collection point name <span className="req">*</span><input name="name" required defaultValue={c?.name ?? ""} placeholder="e.g. Security desk, Main gate" /></label>
+        <label>Full address<input name="address" defaultValue={c?.address ?? ""} placeholder="Building, street, floor…" /></label>
+        <label>Latitude (optional)<input name="lat" type="number" step="any" min={-90} max={90} defaultValue={c?.latitude ?? ""} /></label>
+        <label>Longitude (optional)<input name="lon" type="number" step="any" min={-180} max={180} defaultValue={c?.longitude ?? ""} /></label>
+        <label className="full" style={{ gridColumn: "1 / -1" }}>Directions / instructions for the owner<textarea name="instructions" maxLength={1000} defaultValue={c?.instructions ?? ""} placeholder="Opening hours, what to bring…" /></label>
       </div>
       {msg && <div className="msg error" role="alert">{msg}</div>}
-      <p className="muted tiny" style={{ margin: "18px 0 0", fontWeight: 700, letterSpacing: ".04em" }}>LOST VS FOUND</p>
-      <div className="lvf"><ReportFacts r={c.lost_report} kind="lost" /><ReportFacts r={c.found_report} kind="found" place={c.found_location} /></div>
-      <div className="lvf">
-        <div className="party"><b>Owner</b><br />{c.owner.name}<br /><span className="muted">{c.owner.email}</span></div>
-        <div className="party"><b>Finder</b><br />{c.finder.name}<br /><span className="muted">{c.finder.email}</span></div>
-      </div>
+      <button className="btn btn-primary" disabled={busy}>{label}</button>
+    </form>
+  );
+}
+
+function CaseDrawer({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
+  const q = useAsync(() => api.staff.caseDetail(id), [id]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [ok, setOk] = useState("");
+  const [showCol, setShowCol] = useState(false);
+  const [evMsg, setEvMsg] = useState("");
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  const [hoNote, setHoNote] = useState("");
+  const run = async (label: string, action: string, body?: unknown, after?: () => void) => {
+    setBusy(true); setMsg(""); setOk("");
+    try { await api.staff.caseAct(id, action, body); setOk(label); after?.(); q.reload(); onChanged(); }
+    catch (e) { setMsg(errorText(e)); } finally { setBusy(false); }
+  };
+  const c = q.data;
+  const can = (a: string) => !!c?.allowed_actions.includes(a);
+  return (
+    <Modal side title={`Recovery case #${id}`} onClose={onClose}>
+      <Async q={q}>{() => c && (<>
+        <div className="row"><Chip status={c.status} /><span className="chip">{pct(c.fusion_score)}% relevance</span>
+          <span className="muted tiny">Requested {fmtDateTime(c.created_at)}</span></div>
+        {msg && <div className="msg error" role="alert">{msg}</div>}
+        {ok && <div className="msg success" role="status">{ok}</div>}
+
+        <div className="act-panel"><b>Decision</b>
+          <p className="muted tiny" style={{ margin: "2px 0 8px" }}>The AI score only shows how alike the reports are. Ownership is your decision.</p>
+          {can("review") && <div className="row" style={{ marginBottom: 8 }}><ConfirmBtn label="Mark as under review" confirmLabel="Confirm: start review" cls="btn-primary" disabled={busy}
+            onGo={() => void run("Case is now under review.", "review")} /></div>}
+          {can("request-evidence") && <div style={{ marginBottom: 10 }}>
+            <label>Request additional evidence (the claim stays open)<textarea value={evMsg} onChange={e => setEvMsg(e.target.value)} maxLength={1000} placeholder="What should the claimant provide?" /></label>
+            <ConfirmBtn label="Request evidence" confirmLabel="Confirm: send request" cls="" disabled={busy || evMsg.trim().length < 3}
+              onGo={() => void run("Evidence requested; the claimant was notified.", "request-evidence", { message: evMsg }, () => setEvMsg(""))} /></div>}
+          {can("approve") && <div style={{ marginBottom: 10 }}>
+            <div className="row"><ConfirmBtn label="Approve ownership" confirmLabel="Confirm: approve" cls="btn-primary" disabled={busy}
+              onGo={() => void run("Ownership approved.", "approve")} />
+              <button type="button" className="btn btn-sm" onClick={() => setShowCol(s => !s)}>{showCol ? "Hide" : "Approve and set"} collection point</button></div>
+            {showCol && <div style={{ marginTop: 8 }}><CollectionFields c={null} busy={busy} label="Approve and release collection details"
+              onSubmit={b => void run("Approved; collection instructions sent.", "approve", { collection: b })} /></div>}</div>}
+          {can("reject") && <div style={{ marginBottom: 10 }}>
+            <label>Reject claim (a reason is required and is shown to the claimant)<textarea value={reason} onChange={e => setReason(e.target.value)} maxLength={1000} placeholder="Why can't ownership be confirmed?" /></label>
+            <ConfirmBtn label="Reject claim" confirmLabel="Confirm: reject" cls="btn-danger" disabled={busy || reason.trim().length < 3}
+              onGo={() => void run("Claim rejected.", "reject", { reason }, () => setReason(""))} /></div>}
+          {can("collection") && <div style={{ marginBottom: 10 }}><b>{c.status === "VERIFIED" ? "Release collection details" : "Update collection details"}</b>
+            <CollectionFields c={c.collection} busy={busy} label={c.status === "VERIFIED" ? "Release to owner" : "Update details"}
+              onSubmit={b => void run("Collection details sent to the owner.", "collection", b)} /></div>}
+          {can("handover") && <div style={{ marginBottom: 10 }}>
+            <label>Handover note (optional)<input value={hoNote} onChange={e => setHoNote(e.target.value)} placeholder="e.g. ID checked" /></label>
+            <ConfirmBtn label="Confirm physical handover" confirmLabel="Confirm: item handed over" cls="btn-primary" disabled={busy}
+              onGo={() => void run("Handover recorded; both reports closed.", "handover", { note: hoNote || null })} /></div>}
+          {can("complete") && <ConfirmBtn label="Complete recovery" confirmLabel="Confirm: complete" cls="btn-primary" disabled={busy}
+            onGo={() => void run("Recovery completed.", "complete")} />}
+          {!c.allowed_actions.some(a => a !== "note") && <p className="muted">This case is closed ({statusChip(c.status).text}).</p>}
+        </div>
+
+        <div className="proof"><b>Claimant's explanation</b><p>{c.proof ?? "No explanation given."}</p>
+          {c.claim_features && <p><b>Distinguishing characteristics:</b> {c.claim_features}</p>}
+          {c.claim_notes && <p><b>Other information:</b> {c.claim_notes}</p>}</div>
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>OWNERSHIP EVIDENCE ({c.evidence.length})</p>
+        {c.evidence.length === 0 ? <p className="muted">No evidence uploaded.</p> :
+          <div className="hist">{c.evidence.map(e => (
+            <div className="ev" key={e.id}>{e.has_image && <div className="ev-thumbs"><SecureImage load={() => api.evidenceImage(c.id, e.id)} alt="Claimant evidence" className="" deps={[e.id]} /></div>}
+              {e.note && <p style={{ margin: "6px 0 0" }}>{e.note}</p>}<span className="muted tiny">Submitted {fmtDateTime(e.created_at)}</span></div>))}</div>}
+
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>CLAIMANT</p>
+        <div className="party"><b>{c.claimant.name}</b> · <span className="muted">{c.claimant.email}</span>
+          <div className="muted tiny">Account created {fmtDateTime(c.claimant.account_created_at)} · {c.claimant.lost_reports} lost / {c.claimant.found_reports} found reports ·
+            {" "}{c.claimant.claims_total} claims ({c.claimant.claims_completed} returned, {c.claimant.claims_rejected} rejected)</div></div>
+
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>LOST VS FOUND</p>
+        <div className="lvf"><ReportFacts r={c.lost_report} kind="lost" /><ReportFacts r={c.found_report} kind="found" place={c.found_location} /></div>
+        {c.found_directions && <p><b>Finder's directions:</b> {c.found_directions}</p>}
+        <div className="party" style={{ marginTop: 8 }}><b>Finder</b> · {c.finder.name} · <span className="muted">{c.finder.email}</span></div>
+
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>AI MATCH DETAILS</p>
+        <div className="card chart"><SignalBars m={{ image_similarity: c.match.signals[0].value, words_photo_similarity: c.match.signals[1].value,
+          text_similarity: c.match.signals[2].value, location_similarity: c.match.signals[3].value }} />
+          <p className="muted tiny" style={{ marginTop: 8 }}>{c.match.explanation}{c.match.distance_m !== null && ` Distance between the two places: ${Math.round(c.match.distance_m)} m.`}</p></div>
+
+        {c.collection && <><p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>COLLECTION POINT</p>
+          <div className="party"><b>{c.collection.name}</b>{c.collection.address && <div>{c.collection.address}</div>}{c.collection.instructions && <div className="muted">{c.collection.instructions}</div>}
+            {c.collection.maps_url && <a href={c.collection.maps_url} target="_blank" rel="noreferrer noopener">Open in maps</a>}</div></>}
+        {c.handed_over_at && <p><b>Handed over</b> {fmtDateTime(c.handed_over_at)} by {c.handed_over_by}</p>}
+
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>INTERNAL NOTE (staff only)</p>
+        <div className="row"><input style={{ flex: 1 }} value={note} onChange={e => setNote(e.target.value)} placeholder="Record a verification note…" />
+          <button className="btn btn-sm" disabled={busy || !note.trim()} onClick={() => void run("Note saved.", "notes", { note }, () => setNote(""))}>Add note</button></div>
+
+        <p className="muted tiny" style={{ margin: "14px 0 6px", fontWeight: 700 }}>VERIFICATION HISTORY</p>
+        <div className="hist">{c.events.map(e => (
+          <div className={`ev${e.internal ? " internal" : ""}`} key={e.id}><b>{e.action.replace(/_/g, " ").toLowerCase().replace(/^./, x => x.toUpperCase())}</b>
+            {e.from_status && e.to_status && <span className="muted"> · {statusChip(e.from_status).text} → {statusChip(e.to_status).text}</span>}
+            {e.internal && <span className="chip">internal</span>}
+            <div className="muted tiny">{e.actor_name} ({e.actor_role}) · {fmtDateTime(e.created_at)}</div>{e.note && <div>{e.note}</div>}</div>))}</div>
+      </>)}</Async>
     </Modal>
   );
 }
@@ -123,12 +230,11 @@ function Claims({ reloadSummary }: { reloadSummary: () => void }) {
   const [status, setStatus] = useState("PENDING");
   const [q, setQ] = useState("");
   const list = useAsync(() => api.staff.cases(status, q), [status, q]);
-  const [open, setOpen] = useState<RecoveryCase | null>(null);
-  const act = async (id: number, a: "verify" | "reject" | "complete") => { await api.staff.caseAction(id, a); list.reload(); reloadSummary(); };
+  const [open, setOpen] = useState<number | null>(null);
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 14 }}>
-        <Seg value={status} onChange={setStatus} options={[["PENDING", "Pending"], ["VERIFIED", "Verified"], ["COMPLETED", "Completed"], ["REJECTED", "Rejected"], ["CANCELLED", "Cancelled"], ["ALL", "All"]]} />
+        <Seg value={status} onChange={setStatus} options={[["PENDING", "Pending"], ["UNDER_REVIEW", "In review"], ["ADDITIONAL_EVIDENCE_REQUESTED", "Evidence"], ["VERIFIED", "Approved"], ["AWAITING_COLLECTION", "To collect"], ["HANDED_OVER", "Handed over"], ["COMPLETED", "Completed"], ["REJECTED", "Rejected"], ["CANCELLED", "Cancelled"], ["ALL", "All"]]} />
         <div className="row"><Search value={q} onChange={setQ} placeholder="Search code, item, owner, finder…" /><ExportBtn what="claims" /></div>
       </div>
       <Async q={list} empty={d => d.length ? null : <Empty title="No claims in this view." />}>
@@ -143,23 +249,19 @@ function Claims({ reloadSummary }: { reloadSummary: () => void }) {
                 <p className="muted tiny">Finder: {c.finder.name} · {c.finder.email}</p></div>
               <div className="report-actions" style={{ alignItems: "flex-end" }}><Chip status={c.status} />
                 <span className="chip">{pct(c.fusion_score)}% relevance</span>
-                <span className="chip">{CUSTODY_TEXT[c.found_report.custody_status ?? ""] ?? c.found_report.custody_status}</span></div>
+                {c.evidence_count > 0 && <span className="chip blue">{c.evidence_count} evidence</span>}</div>
             </div>
-            <div className="proof" style={{ margin: "0 18px" }}><b>Owner's proof:</b> {c.proof ?? "none given"}</div>
+            <div className="proof" style={{ margin: "0 18px" }}><b>Claimant says:</b> {c.proof ?? "no explanation given"}</div>
             <div className="row" style={{ justifyContent: "space-between", padding: "12px 18px 16px" }}>
               <span className="muted tiny">Requested {fmtDateTime(c.created_at)}</span>
-              <div className="row"><button className="btn btn-sm" onClick={() => setOpen(c)}>View details</button>
-                {c.status === "PENDING" && <><button className="btn btn-primary btn-sm" onClick={() => void act(c.id, "verify")}><Icon name="shield" size={14} />Verify owner</button>
-                  <button className="btn btn-danger btn-sm" onClick={() => void act(c.id, "reject")}><Icon name="x" size={14} />Reject</button></>}
-                {c.status === "VERIFIED" && <button className="btn btn-primary btn-sm" onClick={() => void act(c.id, "complete")}>Mark as handed over</button>}</div>
+              <button className="btn btn-primary btn-sm" onClick={() => setOpen(c.id)}>Open case</button>
             </div>
-          </article>))}
-          {open && <CaseDrawer c={open} onClose={() => setOpen(null)} onAct={a => act(open.id, a)} />}</>}
+          </article>))}</>}
       </Async>
+      {open !== null && <CaseDrawer id={open} onClose={() => setOpen(null)} onChanged={() => { list.reload(); reloadSummary(); }} />}
     </>
   );
 }
-
 /* ---------------- deposits ---------------- */
 function Deposits({ reloadSummary }: { reloadSummary: () => void }) {
   const q = useAsync(api.staff.deposits, []);
@@ -280,12 +382,15 @@ export default function Staff() {
     <>
       <div className="page-head"><div><h1>Staff workspace</h1><p>Verify claims, confirm deposits and follow what the matcher is doing.</p></div></div>
       <div className="stats">
-        <div className="stat"><div className="k">Claims to verify</div><div className="v">{s?.claims_to_verify ?? "—"}</div><div className="s">waiting for staff</div></div>
-        <div className="stat green"><div className="k">Verified, awaiting handover</div><div className="v">{s?.verified_awaiting_handover ?? "—"}</div><div className="s">owner to collect</div></div>
-        <div className="stat"><div className="k">Deposits to confirm</div><div className="v">{s?.deposits_to_confirm ?? "—"}</div><div className="s">at drop points</div></div>
-        <div className="stat green"><div className="k">Finders holding items</div><div className="v">{s?.finders_holding_items ?? "—"}</div><div className="s">still with the finder</div></div>
-      </div>
-      <div className="tabs" role="tablist">{TABS.map(([k, l]) => (
+        <div className="stat"><div className="k">Lost reports</div><div className="v">{s?.total_lost ?? "—"}</div><div className="s">{s?.active_lost ?? "—"} still active</div></div>
+        <div className="stat green"><div className="k">Found reports</div><div className="v">{s?.total_found ?? "—"}</div><div className="s">{s?.active_found ?? "—"} still active</div></div>
+        <div className="stat"><div className="k">Pending requests</div><div className="v">{s?.pending_requests ?? "—"}</div><div className="s">{s?.under_review ?? 0} under review</div></div>
+        <div className="stat"><div className="k">Awaiting verification</div><div className="v">{s?.claims_to_verify ?? "—"}</div><div className="s">{s?.evidence_requested ?? 0} waiting for evidence</div></div>
+        <div className="stat green"><div className="k">Approved claims</div><div className="v">{s?.approved_claims ?? "—"}</div><div className="s">awaiting collection</div></div>
+        <div className="stat"><div className="k">Rejected claims</div><div className="v">{s?.rejected_claims ?? "—"}</div><div className="s">&nbsp;</div></div>
+        <div className="stat green"><div className="k">Completed recoveries</div><div className="v">{s?.completed_recoveries ?? "—"}</div><div className="s">handed over</div></div>
+        <div className="stat"><div className="k">Deposits to confirm</div><div className="v">{s?.deposits_to_confirm ?? "—"}</div><div className="s">{s?.finders_holding_items ?? 0} items with finders</div></div>
+      </div>      <div className="tabs" role="tablist">{TABS.map(([k, l]) => (
         <button key={k} role="tab" aria-selected={tab === k} className={`tab${tab === k ? " active" : ""}`} onClick={() => setParams({ tab: k })}>{l}{badge(k)}</button>))}</div>
       {tab === "analytics" && <Async q={analytics}>{a => <AnalyticsView a={a} />}</Async>}
       {tab === "claims" && <Claims reloadSummary={() => { summary.reload(); analytics.reload(); }} />}

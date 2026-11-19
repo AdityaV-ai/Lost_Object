@@ -5,8 +5,9 @@ from fastapi import APIRouter
 from fastapi.responses import Response
 
 from app.api.deps import DB, StaffUser
-from app.schemas import (Analytics, MatchRow, OkOut, PendingDepositOut, PersonRow, RecoveryCaseOut, ReportRow,
-                         StaffActionOut, StaffSummary)
+from app.schemas import (Analytics, ApproveIn, CaseDetailOut, CollectionIn, MatchRow, MessageIn, NoteIn, OkOut,
+                         PendingDepositOut, PersonRow, ReasonIn, RecoveryCaseOut, ReportRow, StaffActionOut,
+                         StaffSummary)
 from app.services import staff_service
 
 router = APIRouter(prefix="/staff", tags=["staff"])
@@ -33,16 +34,74 @@ def confirm_deposit(report_id: int, db: DB, staff: StaffUser):
     return OkOut()
 
 
+# ---------------- recovery cases ----------------
 @router.get("/recovery-requests", response_model=list[RecoveryCaseOut])
 def cases(db: DB, _: StaffUser, status: str | None = None, q: str | None = None):
     return staff_service.list_cases(db, status, q)
 
 
-@router.post("/recovery-requests/{request_id}/{action}", response_model=RecoveryCaseOut)
-def case_action(request_id: int, action: Literal["verify", "reject", "complete"], db: DB, staff: StaffUser):
-    return staff_service.advance_case(db, staff, request_id, action)
+@router.get("/recovery-requests/{request_id}", response_model=CaseDetailOut)
+def case(request_id: int, db: DB, staff: StaffUser):
+    """Full investigation view: claimant, both items, AI score details, evidence, history."""
+    return staff_service.case_detail(db, staff, request_id)
 
 
+@router.post("/recovery-requests/{request_id}/review", response_model=CaseDetailOut)
+def review(request_id: int, db: DB, staff: StaffUser, body: NoteIn | None = None):
+    """PENDING -> UNDER_REVIEW."""
+    return staff_service.start_review(db, staff, request_id, body.note if body else None)
+
+
+@router.post("/recovery-requests/{request_id}/request-evidence", response_model=CaseDetailOut)
+def request_evidence(request_id: int, body: MessageIn, db: DB, staff: StaffUser):
+    """-> ADDITIONAL_EVIDENCE_REQUESTED. The message is shown to the claimant; the claim is not rejected."""
+    return staff_service.request_evidence(db, staff, request_id, body.message)
+
+
+@router.post("/recovery-requests/{request_id}/approve", response_model=CaseDetailOut)
+def approve(request_id: int, db: DB, staff: StaffUser, body: ApproveIn | None = None):
+    """-> VERIFIED (ownership approved). May include `collection` to release collection instructions at once."""
+    body = body or ApproveIn()
+    return staff_service.approve(db, staff, request_id, body.note, body.collection)
+
+
+@router.post("/recovery-requests/{request_id}/verify", response_model=CaseDetailOut, deprecated=True)
+def verify(request_id: int, db: DB, staff: StaffUser):
+    """Legacy alias of /approve."""
+    return staff_service.approve(db, staff, request_id)
+
+
+@router.post("/recovery-requests/{request_id}/reject", response_model=CaseDetailOut)
+def reject(request_id: int, body: ReasonIn, db: DB, staff: StaffUser):
+    """-> REJECTED. A reason is required and is shown to the claimant."""
+    return staff_service.reject(db, staff, request_id, body.reason)
+
+
+@router.post("/recovery-requests/{request_id}/notes", response_model=CaseDetailOut)
+def note(request_id: int, body: NoteIn, db: DB, staff: StaffUser):
+    """Internal verification note (staff only)."""
+    return staff_service.add_note(db, staff, request_id, body.note)
+
+
+@router.post("/recovery-requests/{request_id}/collection", response_model=CaseDetailOut)
+def collection(request_id: int, body: CollectionIn, db: DB, staff: StaffUser):
+    """Specify or update where the owner collects. VERIFIED -> AWAITING_COLLECTION on first release."""
+    return staff_service.set_collection(db, staff, request_id, body)
+
+
+@router.post("/recovery-requests/{request_id}/handover", response_model=CaseDetailOut)
+def handover(request_id: int, db: DB, staff: StaffUser, body: NoteIn | None = None):
+    """AWAITING_COLLECTION -> HANDED_OVER. Records time and staff member; closes both reports."""
+    return staff_service.confirm_handover(db, staff, request_id, body.note if body else None)
+
+
+@router.post("/recovery-requests/{request_id}/complete", response_model=CaseDetailOut)
+def complete(request_id: int, db: DB, staff: StaffUser, body: NoteIn | None = None):
+    """HANDED_OVER -> COMPLETED."""
+    return staff_service.complete(db, staff, request_id, body.note if body else None)
+
+
+# ---------------- activity views ----------------
 @router.get("/matches", response_model=list[MatchRow])
 def matches(db: DB, _: StaffUser, filter: Literal["all", "unclaimed", "claimed", "dismissed"] = "all",
             min_score: float | None = None, q: str | None = None):

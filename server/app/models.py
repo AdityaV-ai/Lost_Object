@@ -64,6 +64,7 @@ class FoundReport(Base):
     # colour / distinguishing_features were added after the legacy schema (nullable, added by init_db)
     colour: Mapped[str | None] = mapped_column(String(80))
     distinguishing_features: Mapped[str | None] = mapped_column(Text)
+    directions: Mapped[str | None] = mapped_column(Text)  # added column: extra directions to where it was found
     location_id: Mapped[int | None] = mapped_column(ForeignKey("locations.id"))
     custody_status: Mapped[str] = mapped_column(String(40), default="LEFT_WHERE_FOUND")
     status: Mapped[str] = mapped_column(String(30), default="ACTIVE")
@@ -103,6 +104,48 @@ class RecoveryRequest(Base):
     proof: Mapped[str | None] = mapped_column(Text)          # owner-provided details for staff (added column)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Workflow extension (all added columns, nullable). Lifecycle (see services/claim_service.py):
+    # PENDING -> UNDER_REVIEW <-> ADDITIONAL_EVIDENCE_REQUESTED -> VERIFIED (approved) | REJECTED
+    # VERIFIED -> AWAITING_COLLECTION -> HANDED_OVER -> COMPLETED ; owner may CANCEL before handover.
+    claim_features: Mapped[str | None] = mapped_column(Text)       # owner: distinguishing characteristics
+    claim_notes: Mapped[str | None] = mapped_column(Text)          # owner: any other relevant information
+    staff_message: Mapped[str | None] = mapped_column(Text)        # latest staff message shown to the owner
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    collection_name: Mapped[str | None] = mapped_column(String(200))
+    collection_address: Mapped[str | None] = mapped_column(String(500))
+    collection_latitude: Mapped[float | None] = mapped_column(Float)
+    collection_longitude: Mapped[float | None] = mapped_column(Float)
+    collection_instructions: Mapped[str | None] = mapped_column(Text)
+    collection_set_at: Mapped[datetime | None] = mapped_column(DateTime)
+    handed_over_at: Mapped[datetime | None] = mapped_column(DateTime)
+    handed_over_by_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class ClaimEvidence(Base):
+    """Ownership evidence attached to a recovery request: an optional private photo and/or a written note."""
+    __tablename__ = "claim_evidence"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("recovery_requests.id"), index=True)
+    added_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    file_name: Mapped[str | None] = mapped_column(String(100))   # random name under uploads/evidence/
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class ClaimEvent(Base):
+    """Per-claim verification history: who did what, when, from which status to which, and why."""
+    __tablename__ = "claim_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("recovery_requests.id"), index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    actor_role: Mapped[str] = mapped_column(String(20))
+    action: Mapped[str] = mapped_column(String(40))
+    from_status: Mapped[str | None] = mapped_column(String(30))
+    to_status: Mapped[str | None] = mapped_column(String(30))
+    note: Mapped[str | None] = mapped_column(Text)
+    internal: Mapped[bool] = mapped_column(Boolean, default=False)   # internal staff notes are never shown to owners
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    actor: Mapped[User] = relationship()
 
 
 class Notification(Base):
