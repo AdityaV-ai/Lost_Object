@@ -10,4 +10,5 @@ backend/uploads/*
 desktop.ini
 *.tsbuildinfo
 
-demo_data/
+demo_data/*.log
+demo_data/*.err
